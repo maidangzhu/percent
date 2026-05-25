@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { prisma } from "../db/client.js";
+import { mergeOverlappingChatTurns } from "../lib/chatMerge.js";
 
 export const peopleRouter = new Hono();
 
@@ -48,6 +49,17 @@ peopleRouter.get("/:id", async (c) => {
 
   if (!person) return c.json({ error: "not found" }, 404);
 
+  const mergedTurns = mergeOverlappingChatTurns(
+    person.chatTurns.map((t) => ({
+      id: t.id.toString(),
+      log_id: t.logId.toString(),
+      topic: t.topic,
+      captured_at: t.capturedAt,
+      capturedAt: t.capturedAt,
+      messages: t.messages.map((m) => ({ role: m.role, content: m.content })),
+    }))
+  ).reverse();
+
   return c.json({
     data: {
       id: person.id.toString(),
@@ -55,13 +67,45 @@ peopleRouter.get("/:id", async (c) => {
       client_app: person.clientApp,
       created_at: person.createdAt,
       updated_at: person.updatedAt,
-      turns: person.chatTurns.map((t) => ({
-        id: t.id.toString(),
-        log_id: t.logId.toString(),
-        topic: t.topic,
-        captured_at: t.capturedAt,
-        messages: t.messages.map((m) => ({ role: m.role, content: m.content })),
-      })),
+      turns: mergedTurns.map(({ capturedAt, ...turn }) => turn),
     },
   });
+});
+
+// DELETE /people/:id — 删除联系人及其聊天记录
+peopleRouter.delete("/:id", async (c) => {
+  const personId = BigInt(c.req.param("id"));
+
+  const person = await prisma.person.findUnique({
+    where: { id: personId },
+    select: { id: true },
+  });
+
+  if (!person) return c.json({ error: "not found" }, 404);
+
+  await prisma.$transaction(async (tx) => {
+    const turns = await tx.chatTurn.findMany({
+      where: { personId },
+      select: { id: true },
+    });
+    const turnIds = turns.map((turn) => turn.id);
+
+    await tx.task.deleteMany({
+      where: {
+        OR: [
+          { personId },
+          turnIds.length ? { sourceTurnId: { in: turnIds } } : { id: -1n },
+        ],
+      },
+    });
+
+    if (turnIds.length) {
+      await tx.chatMessage.deleteMany({ where: { turnId: { in: turnIds } } });
+      await tx.chatTurn.deleteMany({ where: { id: { in: turnIds } } });
+    }
+
+    await tx.person.delete({ where: { id: personId } });
+  });
+
+  return c.json({ data: { ok: true } });
 });

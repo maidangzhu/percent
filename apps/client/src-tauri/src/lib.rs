@@ -11,7 +11,7 @@ mod screenshotter;
 
 use keyboard::start_keyboard_listener;
 use logger::LogStore;
-use window::setup_windows;
+use window::{set_bubble_hit_regions, setup_windows, BubbleHitRegions};
 
 pub struct AppState {
     pub log_store: Mutex<LogStore>,
@@ -26,7 +26,7 @@ impl Default for AppState {
             .join("percent-tracker");
         Self {
             log_store: Mutex::new(LogStore::default()),
-            screenshot_enabled: AtomicBool::new(false),
+            screenshot_enabled: AtomicBool::new(true),
             log_dir,
         }
     }
@@ -62,11 +62,6 @@ fn activate_app(window: &tauri::WebviewWindow) {
             let nil: *mut NSObject = std::ptr::null_mut();
             let _: () = msg_send![ns_win as *mut NSObject, makeKeyAndOrderFront: nil];
 
-            // [[nsWindow delegate] applicationShouldHandleReopen] — 不需要
-            // 直接拿 NSApp 激活
-            let ns_app: *mut NSObject = msg_send![
-                ns_win as *mut NSObject, class
-            ];
             // 换个思路：用 NSRunningApplication
             let running_app_cls: *mut NSObject = msg_send![
                 class_ref("NSRunningApplication"),
@@ -80,7 +75,6 @@ fn activate_app(window: &tauri::WebviewWindow) {
 
 #[cfg(target_os = "macos")]
 fn class_ref(name: &str) -> *mut objc2_foundation::NSObject {
-    use objc2::runtime::AnyClass;
     use std::ffi::CString;
     let cname = CString::new(name).unwrap();
     unsafe {
@@ -158,6 +152,16 @@ fn report_ai_result(
     let _ = app.emit("ai-result-updated", entry_id);
 }
 
+#[tauri::command]
+fn emit_tasks_updated(app: tauri::AppHandle<Wry>) {
+    let _ = app.emit("tasks-updated", ());
+}
+
+#[tauri::command]
+fn set_mock_task_preview(enabled: bool, app: tauri::AppHandle<Wry>) {
+    let _ = app.emit("mock-task-preview", enabled);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 加载项目根目录的 .env 文件（开发时有效；打包后不依赖此文件）
@@ -168,6 +172,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::default())
+        .manage(BubbleHitRegions::default())
         .invoke_handler(tauri::generate_handler![
             get_logs,
             show_main_window,
@@ -175,6 +180,9 @@ pub fn run() {
             set_screenshot_enabled,
             get_screenshot_enabled,
             report_ai_result,
+            emit_tasks_updated,
+            set_mock_task_preview,
+            set_bubble_hit_regions,
             read_file_base64,
         ])
         .setup(|app| {

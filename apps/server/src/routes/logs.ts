@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { prisma } from "../db/client.js";
+import { elapsedMs, logError, logInfo } from "../lib/appLogger.js";
 
 export const logsRouter = new Hono();
 
@@ -46,6 +47,7 @@ logsRouter.get("/", async (c) => {
 
 // POST /logs — 客户端上报一次 Enter 事件
 logsRouter.post("/", async (c) => {
+  const startedAt = Date.now();
   const body = await c.req.json<{
     occurred_at: string;
     app_name: string;
@@ -55,15 +57,38 @@ logsRouter.post("/", async (c) => {
     screenshot_path?: string;
   }>();
 
-  const log = await prisma.log.create({
-    data: {
-      occurredAt: new Date(body.occurred_at),
-      appName: body.app_name,
-      appBundleId: body.app_bundle_id,
-      isSend: body.is_send,
-      isWechat: body.is_wechat,
-      screenshotPath: body.screenshot_path ?? null,
-    },
+  logInfo("logs.create.start", {
+    app_name: body.app_name,
+    app_bundle_id: body.app_bundle_id,
+    is_send: body.is_send,
+    is_wechat: body.is_wechat,
+    has_screenshot: Boolean(body.screenshot_path),
+    occurred_at: body.occurred_at,
+  });
+
+  let log;
+  try {
+    log = await prisma.log.create({
+      data: {
+        occurredAt: new Date(body.occurred_at),
+        appName: body.app_name,
+        appBundleId: body.app_bundle_id,
+        isSend: body.is_send,
+        isWechat: body.is_wechat,
+        screenshotPath: body.screenshot_path ?? null,
+      },
+    });
+  } catch (error) {
+    logError("logs.create.error", {
+      error,
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw error;
+  }
+
+  logInfo("logs.create.success", {
+    log_id: log.id,
+    duration_ms: elapsedMs(startedAt),
   });
 
   return c.json(

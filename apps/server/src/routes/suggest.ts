@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { prisma } from "../db/client.js";
+import { mergeOverlappingChatTurns } from "../lib/chatMerge.js";
+import { elapsedMs, logError, logInfo, logWarn } from "../lib/appLogger.js";
+import { callChat } from "../lib/chatClient.js";
 
 export const suggestRouter = new Hono();
-
-const KIMI_API_URL = "https://api.moonshot.cn/v1/chat/completions";
 
 type Style = "chat_master" | "cautious" | "flirty" | "icebreaker";
 
@@ -28,10 +29,17 @@ const STYLE_NAMES: Record<Style, string> = {
 // POST /suggest
 // Body: { person_id: number, style: Style }
 suggestRouter.post("/", async (c) => {
+  const startedAt = Date.now();
   const body = await c.req.json<{ person_id: number; style: Style }>();
   const { person_id, style } = body;
+  const traceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (!person_id || !style || !STYLE_PROMPTS[style]) {
+    logWarn("suggest.request.invalid", {
+      trace_id: traceId,
+      has_person_id: Boolean(person_id),
+      style,
+    });
     return c.json({ error: "person_id and valid style are required" }, 400);
   }
 
@@ -51,9 +59,9 @@ suggestRouter.post("/", async (c) => {
     return c.json({ error: "no chat history found for this person" }, 404);
   }
 
-  const historyText = turns
-    .slice()
-    .reverse()
+  const mergedTurns = mergeOverlappingChatTurns(turns);
+
+  const historyText = mergedTurns
     .map((t) =>
       t.messages
         .map((m) => `${m.role === "self" ? "我" : person.name}：${m.content}`)
@@ -63,86 +71,88 @@ suggestRouter.post("/", async (c) => {
 
   const userPrompt = `以下是我和「${person.name}」的聊天记录：\n\n${historyText}\n\n请以「我」的身份，生成 3 条风格各异的回复建议。`;
 
-  const apiKey = process.env.LLM_API_KEY;
-  if (!apiKey) return c.json({ error: "LLM_API_KEY not set" }, 500);
-
   const tools = [
     {
-      type: "function",
-      function: {
-        name: "reply_suggestions",
-        description: "返回 3 条回复建议",
-        parameters: {
-          type: "object",
-          properties: {
-            suggestions: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 3,
-              maxItems: 3,
-              description: "3 条回复建议，每条不超过 20 字，极简短",
-            },
+      name: "reply_suggestions",
+      description: "返回 3 条回复建议",
+      parameters: {
+        type: "object",
+        properties: {
+          suggestions: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 3,
+            maxItems: 3,
+            description: "3 条回复建议，每条不超过 20 字，极简短",
           },
-          required: ["suggestions"],
         },
+        required: ["suggestions"],
       },
     },
   ];
 
-  console.log(
-    `[suggest] person=${person.name}, style=${STYLE_NAMES[style]}, turns=${turns.length}`
-  );
+  logInfo("suggest.request.start", {
+    trace_id: traceId,
+    person_id,
+    person_name: person.name,
+    style,
+    turns: turns.length,
+    merged_turns: mergedTurns.length,
+  });
 
-  const resp = await fetch(KIMI_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  let suggestions: string[];
+  try {
+    const data = await callChat({
+      traceId,
       model: "kimi-k2.6",
       messages: [
         { role: "system", content: STYLE_PROMPTS[style] },
         { role: "user", content: userPrompt },
       ],
       tools,
-      tool_choice: "auto",
-    }),
-  });
+      toolChoice: { type: "tool", toolName: "reply_suggestions" },
+    });
+    const toolCall = data.tool_calls[0];
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    console.error("[suggest] AI error:", resp.status, text.slice(0, 200));
-    return c.json({ error: "AI request failed" }, 502);
-  }
-
-  const data = (await resp.json()) as any;
-  const toolCall = data?.choices?.[0]?.message?.tool_calls?.[0];
-
-  let suggestions: string[];
-
-  if (toolCall) {
-    const result = JSON.parse(toolCall.function.arguments) as {
-      suggestions: string[];
-    };
-    suggestions = result.suggestions;
-  } else {
-    const content: string = data?.choices?.[0]?.message?.content ?? "";
-    console.log("[suggest] no tool call, parsing content:", content.slice(0, 300));
-    const lines = content
-      .split("\n")
-      .map((l: string) => l.replace(/^[\d①②③\-\*\.\s]+/, "").trim())
-      .filter((l: string) => l.length > 4);
-    if (lines.length < 1) {
-      return c.json({ error: "AI did not return structured suggestions" }, 502);
+    if (toolCall) {
+      const result = toolCall.input as { suggestions?: string[] };
+      suggestions = result.suggestions ?? [];
+    } else {
+      logWarn("suggest.ai.no_tool_call", {
+        trace_id: traceId,
+        text_preview: data.text.slice(0, 300),
+      });
+      const lines = data.text
+        .split("\n")
+        .map((l: string) => l.replace(/^[\d①②③\-\*\.\s]+/, "").trim())
+        .filter((l: string) => l.length > 4);
+      suggestions = lines.slice(0, 3);
     }
-    suggestions = lines.slice(0, 3);
+  } catch (error) {
+    logError("suggest.ai.error", {
+      trace_id: traceId,
+      person_id,
+      error,
+      duration_ms: elapsedMs(startedAt),
+    });
+    return c.json({ error: "AI request failed", trace_id: traceId }, 502);
   }
 
-  console.log(`[suggest] got ${suggestions.length} suggestions`);
+  if (suggestions.length < 1) {
+    logWarn("suggest.ai.empty", { trace_id: traceId, person_id });
+    return c.json({ error: "AI did not return structured suggestions", trace_id: traceId }, 502);
+  }
+
+  logInfo("suggest.request.success", {
+    trace_id: traceId,
+    person_id,
+    suggestion_count: suggestions.length,
+    duration_ms: elapsedMs(startedAt),
+  });
 
   return c.json({
     data: {
+      trace_id: traceId,
       person_name: person.name,
       style,
       style_name: STYLE_NAMES[style],

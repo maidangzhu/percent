@@ -1,10 +1,17 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import * as ContextMenu from "@radix-ui/react-context-menu";
 
 // ---- 配置 ----
 
 const API_BASE = "http://localhost:3000";
+
+interface ApiResponse<T> {
+  code: number;
+  message: string;
+  data: T;
+}
 
 // ---- 类型 ----
 
@@ -53,11 +60,25 @@ interface PersonDetail extends PersonSummary {
   turns: TurnDetail[];
 }
 
-type MenuKey = "logs" | "people";
+interface TaskRow {
+  id: number;
+  person_id: number | null;
+  person_name: string | null;
+  title: string;
+  description: string;
+  due_at: string | null;
+  status: "pending" | "completed";
+  evidence: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+type MenuKey = "logs" | "people" | "tasks";
 
 const MENU_ITEMS: { key: MenuKey; label: string; icon: string }[] = [
-  { key: "logs",   label: "Logs",   icon: "📋" },
-  { key: "people", label: "People", icon: "👥" },
+  { key: "logs",   label: "Logs",   icon: "⌘" },
+  { key: "people", label: "People", icon: "◎" },
+  { key: "tasks",  label: "Task",   icon: "✓" },
 ];
 
 // ---- 根组件 ----
@@ -66,12 +87,13 @@ export default function MainWindow() {
   const [activeKey, setActiveKey] = useState<MenuKey>("logs");
   const [logs, setLogs] = useState<LogRow[]>([]);
   const [people, setPeople] = useState<PersonSummary[]>([]);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [screenshotEnabled, setScreenshotEnabled] = useState(false);
 
   const loadLogs = async () => {
     try {
       const resp = await fetch(`${API_BASE}/logs?limit=100&offset=0`);
-      const json = await resp.json() as { data: LogRow[] };
+      const json = await resp.json() as ApiResponse<LogRow[]>;
       setLogs(json.data ?? []);
     } catch (e) {
       console.error("[main] GET /logs error:", e);
@@ -81,16 +103,27 @@ export default function MainWindow() {
   const loadPeople = async () => {
     try {
       const resp = await fetch(`${API_BASE}/people`);
-      const json = await resp.json() as { data: PersonSummary[] };
+      const json = await resp.json() as ApiResponse<PersonSummary[]>;
       setPeople(json.data ?? []);
     } catch (e) {
       console.error("[main] GET /people error:", e);
     }
   };
 
+  const loadTasks = async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/tasks`);
+      const json = await resp.json() as ApiResponse<TaskRow[]>;
+      setTasks(json.data ?? []);
+    } catch (e) {
+      console.error("[main] GET /tasks error:", e);
+    }
+  };
+
   useEffect(() => {
     loadLogs();
     loadPeople();
+    loadTasks();
     invoke<boolean>("get_screenshot_enabled").then(setScreenshotEnabled);
 
     const unlistenEnter = listen("enter-pressed", () => {
@@ -100,10 +133,15 @@ export default function MainWindow() {
     const unlistenAI = listen("ai-result-updated", () => {
       loadLogs();
       loadPeople();
+      loadTasks();
+    });
+    const unlistenTasks = listen("tasks-updated", () => {
+      loadTasks();
     });
     return () => {
       unlistenEnter.then((f) => f());
       unlistenAI.then((f) => f());
+      unlistenTasks.then((f) => f());
     };
   }, []);
 
@@ -117,7 +155,7 @@ export default function MainWindow() {
     <div className="main-layout">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <span className="app-icon">&#9166;</span>
+          <span className="app-icon">%</span>
           <span className="app-title">Percent Tracker</span>
         </div>
         <nav className="sidebar-nav">
@@ -144,9 +182,149 @@ export default function MainWindow() {
           />
         )}
         {activeKey === "people" && (
-          <PeopleView people={people} onRefresh={loadPeople} />
+          <PeopleView people={people} onRefresh={() => { loadPeople(); loadTasks(); }} />
+        )}
+        {activeKey === "tasks" && (
+          <TasksView tasks={tasks} onRefresh={loadTasks} />
         )}
       </main>
+    </div>
+  );
+}
+
+function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => void }) {
+  const [newTitle, setNewTitle] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [mockPreviewOn, setMockPreviewOn] = useState(false);
+
+  const pendingCount = tasks.filter((task) => task.status === "pending").length;
+
+  const createTask = async () => {
+    if (!newTitle.trim()) return;
+    await fetch(`${API_BASE}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: newTitle.trim() }),
+    });
+    setNewTitle("");
+    onRefresh();
+  };
+
+  const updateTask = async (id: number, body: Partial<TaskRow>) => {
+    await fetch(`${API_BASE}/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    onRefresh();
+  };
+
+  const deleteTask = async (id: number) => {
+    await fetch(`${API_BASE}/tasks/${id}`, { method: "DELETE" });
+    onRefresh();
+  };
+
+  const startEdit = (task: TaskRow) => {
+    setEditingId(task.id);
+    setEditingTitle(task.title);
+  };
+
+  const saveEdit = async () => {
+    if (!editingId || !editingTitle.trim()) return;
+    await updateTask(editingId, { title: editingTitle.trim() } as Partial<TaskRow>);
+    setEditingId(null);
+    setEditingTitle("");
+  };
+
+  useEffect(() => {
+    invoke("set_mock_task_preview", { enabled: mockPreviewOn }).catch((e) =>
+      console.error("[tasks] set mock preview failed:", e)
+    );
+  }, [mockPreviewOn]);
+
+  return (
+    <div className="tasks-view">
+      <header className="content-header">
+        <div>
+          <h1>Task</h1>
+          <p className="subtitle">{pendingCount} pending &nbsp;·&nbsp; {tasks.length} total</p>
+        </div>
+        <div className="header-actions">
+          <label className="mock-switch-label" title="只用于预览右下角 AI 确认气泡，不会创建任务">
+            <span>Mock 测试 Task</span>
+            <button
+              type="button"
+              className={`mock-switch ${mockPreviewOn ? "on" : ""}`}
+              role="switch"
+              aria-checked={mockPreviewOn}
+              onClick={() => setMockPreviewOn((value) => !value)}
+            >
+              <span />
+            </button>
+          </label>
+          <button className="refresh-btn" onClick={onRefresh}>Refresh</button>
+        </div>
+      </header>
+
+      <div className="task-compose">
+        <input
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") createTask(); }}
+          placeholder="新增待办"
+        />
+        <button onClick={createTask}>Add</button>
+      </div>
+
+      <div className="task-list">
+        {tasks.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">✓</div>
+            <p>暂无待办</p>
+          </div>
+        ) : (
+          tasks.map((task) => (
+            <div key={task.id} className={`task-item ${task.status}`}>
+              <button
+                className={`task-check ${task.status === "completed" ? "checked" : ""}`}
+                onClick={() =>
+                  updateTask(task.id, {
+                    status: task.status === "completed" ? "pending" : "completed",
+                  } as Partial<TaskRow>)
+                }
+                title={task.status === "completed" ? "恢复" : "完成"}
+              >
+                ✓
+              </button>
+              <div className="task-main">
+                {editingId === task.id ? (
+                  <input
+                    className="task-title-input"
+                    value={editingTitle}
+                    onChange={(e) => setEditingTitle(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); }}
+                    autoFocus
+                  />
+                ) : (
+                  <button className="task-title" onClick={() => startEdit(task)}>
+                    {task.title}
+                  </button>
+                )}
+                <div className="task-meta">
+                  {task.person_name ? `来自 ${task.person_name}` : "手动创建"}
+                  {task.due_at ? ` · ${new Date(task.due_at).toLocaleString()}` : ""}
+                </div>
+                {task.evidence && <div className="task-evidence">{task.evidence}</div>}
+              </div>
+              <div className="task-actions">
+                {editingId === task.id && <button onClick={saveEdit}>Save</button>}
+                <button onClick={() => deleteTask(task.id)}>Delete</button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -174,7 +352,7 @@ function LogsView({
 
     try {
       const resp = await fetch(`${API_BASE}/people/${log.person_id}`);
-      const json = await resp.json() as { data: PersonDetail };
+      const json = await resp.json() as ApiResponse<PersonDetail>;
       const person = json.data;
       const turn = person.turns.find((t) => t.id === log.turn_id);
       if (turn) {
@@ -216,14 +394,14 @@ function LogsView({
               onClick={onToggleScreenshot}
             />
           </label>
-          <button className="refresh-btn" onClick={onRefresh}>↻ Refresh</button>
+        <button className="refresh-btn" onClick={onRefresh}>Refresh</button>
         </div>
       </header>
 
       <div className="logs-table-wrapper">
         {logs.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-icon">⌨️</div>
+            <div className="empty-icon">⌘</div>
             <p>No logs yet</p>
             <p className="hint">Press Enter anywhere to start tracking</p>
           </div>
@@ -365,7 +543,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
     setLoading(true);
     try {
       const resp = await fetch(`${API_BASE}/people/${id}`);
-      const json = await resp.json() as { data: PersonDetail };
+      const json = await resp.json() as ApiResponse<PersonDetail>;
       setPersonDetail(json.data);
     } catch (e) {
       console.error("[main] GET /people/:id error:", e);
@@ -392,6 +570,29 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
     setSuggestions([]);
   };
 
+  const handleDeletePerson = async (person: PersonSummary) => {
+    const ok = window.confirm(`删除 ${person.name} 及其所有聊天记录？`);
+    if (!ok) return;
+
+    try {
+      const resp = await fetch(`${API_BASE}/people/${person.id}`, { method: "DELETE" });
+      const json = await resp.json() as ApiResponse<{ ok: boolean }>;
+      if (!resp.ok || json.code !== 0) {
+        console.error("[people] delete error:", json.message);
+        return;
+      }
+
+      if (selectedId === person.id) {
+        setSelectedId(null);
+        setPersonDetail(null);
+        setSuggestions([]);
+      }
+      onRefresh();
+    } catch (e) {
+      console.error("[people] delete request failed:", e);
+    }
+  };
+
   const handleGenerateSuggestions = async () => {
     if (!selectedId) return;
     setSuggestLoading(true);
@@ -402,9 +603,9 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ person_id: selectedId, style: selectedStyle }),
       });
-      const json = await resp.json() as { data: { suggestions: string[] }; error?: string };
-      if (!resp.ok || json.error) {
-        console.error("[suggest] error:", json.error);
+      const json = await resp.json() as ApiResponse<{ suggestions: string[] }>;
+      if (!resp.ok || json.code !== 0) {
+        console.error("[suggest] error:", json.message);
       } else {
         setSuggestions(json.data.suggestions);
       }
@@ -428,23 +629,36 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
       <div className="people-list">
         <div className="people-list-header">
           <span>联系人</span>
-          <button className="refresh-btn-sm" onClick={onRefresh}>↻</button>
+          <button className="refresh-btn-sm" onClick={onRefresh}>Refresh</button>
         </div>
         {people.length === 0 ? (
           <div className="people-empty">暂无记录</div>
         ) : (
           people.map((p) => (
-            <button
-              key={p.id}
-              className={`person-item ${selectedId === p.id ? "active" : ""}`}
-              onClick={() => handleSelectPerson(p.id)}
-            >
-              <div className="person-avatar">{p.name.charAt(0).toUpperCase()}</div>
-              <div className="person-info">
-                <div className="person-name">{p.name}</div>
-                <div className="person-meta">{p.client_app} · {p.turn_count} 次对话</div>
-              </div>
-            </button>
+            <ContextMenu.Root key={p.id}>
+              <ContextMenu.Trigger asChild>
+                <button
+                  className={`person-item ${selectedId === p.id ? "active" : ""}`}
+                  onClick={() => handleSelectPerson(p.id)}
+                >
+                  <div className="person-avatar">{p.name.charAt(0).toUpperCase()}</div>
+                  <div className="person-info">
+                    <div className="person-name">{p.name}</div>
+                    <div className="person-meta">{p.client_app} · {p.turn_count} 次对话</div>
+                  </div>
+                </button>
+              </ContextMenu.Trigger>
+              <ContextMenu.Portal>
+                <ContextMenu.Content className="context-menu-content" alignOffset={4}>
+                  <ContextMenu.Item
+                    className="context-menu-item danger"
+                    onSelect={() => handleDeletePerson(p)}
+                  >
+                    删除联系人
+                  </ContextMenu.Item>
+                </ContextMenu.Content>
+              </ContextMenu.Portal>
+            </ContextMenu.Root>
           ))
         )}
       </div>
@@ -509,7 +723,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
             </div>
 
             <div className="turns-timeline">
-              {(personDetail.turns ?? []).slice().reverse().map((turn) => (
+              {(personDetail.turns ?? []).map((turn) => (
                 <div key={turn.id} className="turn-card">
                   <div className="turn-meta">
                     <span className="turn-time">{new Date(turn.captured_at).toLocaleString()}</span>
@@ -531,7 +745,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
           </>
         ) : (
           <div className="empty-state">
-            <div className="empty-icon">👥</div>
+            <div className="empty-icon">◎</div>
             <p>选择一个联系人</p>
             <p className="hint">在微信中聊天并开启截图调试后，AI 会自动识别并归档</p>
           </div>

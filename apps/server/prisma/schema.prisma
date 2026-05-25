@@ -16,6 +16,7 @@ model Log {
   screenshotPath String?    @map("screenshot_path")
   createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz
   chatTurns      ChatTurn[]
+  tasks          Task[]
 
   @@index([occurredAt(sort: Desc)], map: "idx_logs_occurred_at")
   @@index([appBundleId], map: "idx_logs_app_bundle_id")
@@ -29,6 +30,7 @@ model Person {
   createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
   chatTurns ChatTurn[]
+  tasks     Task[]
 
   @@unique([name, clientApp])
   @@map("people")
@@ -45,6 +47,7 @@ model ChatTurn {
   log           Log           @relation(fields: [logId], references: [id], onDelete: Cascade)
   person        Person        @relation(fields: [personId], references: [id])
   messages      ChatMessage[]
+  tasks         Task[]
 
   @@index([personId], map: "idx_chat_turns_person_id")
   @@index([logId], map: "idx_chat_turns_log_id")
@@ -62,4 +65,29 @@ model ChatMessage {
 
   @@index([turnId, seq], map: "idx_chat_messages_turn_id")
   @@map("chat_messages")
+}
+
+model Task {
+  id            BigInt    @id @default(autoincrement())
+  personId      BigInt?   @map("person_id")
+  logId         BigInt?   @map("log_id")
+  sourceTurnId  BigInt?   @map("source_turn_id")
+  title         String
+  description   String    @default("")
+  dueAt         DateTime? @map("due_at") @db.Timestamptz
+  status        String    @default("pending")
+  fingerprint   String    @unique
+  evidence      String    @default("")
+  rawAiResponse Json?     @map("raw_ai_response")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz
+  person        Person?   @relation(fields: [personId], references: [id])
+  log           Log?      @relation(fields: [logId], references: [id], onDelete: SetNull)
+  sourceTurn    ChatTurn? @relation(fields: [sourceTurnId], references: [id], onDelete: SetNull)
+
+  @@index([status, dueAt], map: "idx_tasks_status_due_at")
+  @@index([personId], map: "idx_tasks_person_id")
+  @@index([sourceTurnId], map: "idx_tasks_source_turn_id")
+  @@map("tasks")
 }
