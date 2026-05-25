@@ -1,0 +1,13 @@
+{
+  "name": "percent",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --parallel --filter percent-server --filter percent-tracker dev",
+    "client": "pnpm --filter percent-tracker dev",
+    "server": "pnpm --filter percent-server dev"
+  }
+}
