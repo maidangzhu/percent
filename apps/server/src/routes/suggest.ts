@@ -50,8 +50,7 @@ suggestRouter.post("/", async (c) => {
 
   const turns = await prisma.chatTurn.findMany({
     where: { personId: person.id },
-    orderBy: { capturedAt: "desc" },
-    take: 3,
+    orderBy: { capturedAt: "asc" },
     include: { messages: { orderBy: { seq: "asc" } } },
   });
 

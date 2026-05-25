@@ -96,6 +96,20 @@ impl LogStore {
         self.entries.iter().filter(|e| e.is_send).count()
     }
 
+    pub fn clear_local_files(&mut self) -> std::io::Result<usize> {
+        self.entries.clear();
+
+        let mut removed = 0_usize;
+        for path in [&self.log_file, &self.log_dir.join("ai-result.txt")] {
+            if path.exists() {
+                std::fs::remove_file(path)?;
+                removed += 1;
+            }
+        }
+
+        Ok(removed)
+    }
+
     fn load_existing(&mut self) {
         if let Ok(content) = std::fs::read_to_string(&self.log_file) {
             for (i, line) in content.lines().enumerate() {

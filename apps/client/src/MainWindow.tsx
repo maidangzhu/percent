@@ -73,12 +73,18 @@ interface TaskRow {
   completed_at: string | null;
 }
 
-type MenuKey = "logs" | "people" | "tasks";
+interface ShortcutConfig {
+  key: string;
+  modifiers: string[];
+}
+
+type MenuKey = "logs" | "people" | "tasks" | "settings";
 
 const MENU_ITEMS: { key: MenuKey; label: string; icon: string }[] = [
   { key: "logs",   label: "Logs",   icon: "⌘" },
   { key: "people", label: "People", icon: "◎" },
   { key: "tasks",  label: "Task",   icon: "✓" },
+  { key: "settings", label: "Settings", icon: "⚙" },
 ];
 
 // ---- 根组件 ----
@@ -89,6 +95,7 @@ export default function MainWindow() {
   const [people, setPeople] = useState<PersonSummary[]>([]);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [screenshotEnabled, setScreenshotEnabled] = useState(false);
+  const [shortcutConfig, setShortcutConfig] = useState<ShortcutConfig>({ key: "Enter", modifiers: [] });
 
   const loadLogs = async () => {
     try {
@@ -125,6 +132,7 @@ export default function MainWindow() {
     loadPeople();
     loadTasks();
     invoke<boolean>("get_screenshot_enabled").then(setScreenshotEnabled);
+    invoke<ShortcutConfig>("get_shortcut_config").then(setShortcutConfig);
 
     const unlistenEnter = listen("enter-pressed", () => {
       // 延迟一点等后端写完
@@ -187,7 +195,159 @@ export default function MainWindow() {
         {activeKey === "tasks" && (
           <TasksView tasks={tasks} onRefresh={loadTasks} />
         )}
+        {activeKey === "settings" && (
+          <SettingsView
+            screenshotEnabled={screenshotEnabled}
+            onToggleScreenshot={toggleScreenshot}
+            shortcutConfig={shortcutConfig}
+            onShortcutSaved={setShortcutConfig}
+            onCacheCleared={() => {
+              loadLogs();
+              loadPeople();
+              loadTasks();
+            }}
+          />
+        )}
       </main>
+    </div>
+  );
+}
+
+const SHORTCUT_OPTIONS: { label: string; value: ShortcutConfig }[] = [
+  { label: "Enter", value: { key: "Enter", modifiers: [] } },
+  { label: "Command + Enter", value: { key: "Enter", modifiers: ["Command"] } },
+  { label: "Control + Enter", value: { key: "Enter", modifiers: ["Control"] } },
+];
+
+function shortcutEquals(a: ShortcutConfig, b: ShortcutConfig) {
+  return a.key === b.key && a.modifiers.join(",") === b.modifiers.join(",");
+}
+
+function SettingsView({
+  screenshotEnabled,
+  onToggleScreenshot,
+  shortcutConfig,
+  onShortcutSaved,
+  onCacheCleared,
+}: {
+  screenshotEnabled: boolean;
+  onToggleScreenshot: () => void;
+  shortcutConfig: ShortcutConfig;
+  onShortcutSaved: (shortcut: ShortcutConfig) => void;
+  onCacheCleared: () => void;
+}) {
+  const [draftShortcut, setDraftShortcut] = useState<ShortcutConfig>(shortcutConfig);
+  const [savingShortcut, setSavingShortcut] = useState(false);
+  const [cacheMessage, setCacheMessage] = useState("");
+  const [shortcutMessage, setShortcutMessage] = useState("");
+
+  useEffect(() => {
+    setDraftShortcut(shortcutConfig);
+  }, [shortcutConfig]);
+
+  const clearCache = async () => {
+    setCacheMessage("");
+    const ok = window.confirm("清空本地截图和本地日志缓存？数据库里的聊天、People、Task 不会被删除。");
+    if (!ok) return;
+    try {
+      const removed = await invoke<number>("clear_local_cache");
+      setCacheMessage(removed > 0 ? `已清理 ${removed} 个本地缓存文件。` : "没有可清理的本地缓存。");
+      onCacheCleared();
+    } catch (e) {
+      console.error("[settings] clear cache failed:", e);
+      setCacheMessage("清理失败，请看控制台日志。");
+    }
+  };
+
+  const saveShortcut = async () => {
+    setSavingShortcut(true);
+    setShortcutMessage("");
+    try {
+      const saved = await invoke<ShortcutConfig>("set_shortcut_config", { shortcut: draftShortcut });
+      onShortcutSaved(saved);
+      setShortcutMessage("快捷键已保存。");
+    } catch (e) {
+      console.error("[settings] save shortcut failed:", e);
+      setShortcutMessage("保存失败，这个快捷键暂不支持。");
+    } finally {
+      setSavingShortcut(false);
+    }
+  };
+
+  return (
+    <div className="settings-view">
+      <header className="content-header">
+        <div>
+          <h1>Settings</h1>
+          <p className="subtitle">本地缓存、截图和快捷键</p>
+        </div>
+      </header>
+
+      <section className="settings-section">
+        <div className="settings-section-main">
+          <h2>清空缓存</h2>
+          <p>清理本机截图文件和本地 enter / AI 日志文件，不会删除服务端数据库里的聊天、People 或 Task。</p>
+        </div>
+        <div className="settings-section-action">
+          <button className="danger-btn" onClick={clearCache}>清空缓存</button>
+          {cacheMessage && <span className="settings-message">{cacheMessage}</span>}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-main">
+          <h2>截图</h2>
+          <p>开启后，在微信里触发监听快捷键时会保存截图并进入 AI 分析流程。</p>
+        </div>
+        <div className="settings-section-action">
+          <label className="settings-switch-label">
+            <span>{screenshotEnabled ? "已开启" : "已关闭"}</span>
+            <span
+              className={`toggle-switch ${screenshotEnabled ? "on" : ""}`}
+              onClick={onToggleScreenshot}
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-main">
+          <h2>快捷键</h2>
+          <p>选择触发截图和分析流程的按键。默认监听 Enter。</p>
+        </div>
+        <div className="shortcut-editor">
+          <div className="shortcut-segment" role="radiogroup" aria-label="快捷键">
+            {SHORTCUT_OPTIONS.map((option) => (
+              <button
+                key={option.label}
+                type="button"
+                role="radio"
+                aria-checked={shortcutEquals(draftShortcut, option.value)}
+                className={shortcutEquals(draftShortcut, option.value) ? "active" : ""}
+                onClick={() => {
+                  setDraftShortcut(option.value);
+                  setShortcutMessage("");
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <button className="refresh-btn" onClick={saveShortcut} disabled={savingShortcut}>
+            {savingShortcut ? "Saving" : "Save"}
+          </button>
+          <button
+            className="refresh-btn"
+            onClick={() => {
+              setDraftShortcut({ key: "Enter", modifiers: [] });
+              setShortcutMessage("");
+            }}
+          >
+            Reset
+          </button>
+          {shortcutMessage && <span className="settings-message">{shortcutMessage}</span>}
+        </div>
+      </section>
     </div>
   );
 }

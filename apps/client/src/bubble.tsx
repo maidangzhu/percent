@@ -2,11 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 // ---- 类型定义 ----
 
 interface EnterEvent {
   entry_id: number;
+  occurred_at: string;
+  app_name: string;
+  app_bundle_id: string;
+  is_send: boolean;
+  is_wechat: boolean;
+  screenshot_path: string | null;
+}
+
+interface CaptureContext {
   occurred_at: string;
   app_name: string;
   app_bundle_id: string;
@@ -53,6 +63,31 @@ const MOCK_TASK_CANDIDATE: TaskCandidate = {
 
 type TaskCandidateHandler = (candidate: TaskCandidate, isMockPreview?: boolean) => void;
 
+interface AnalyzePipelineResult {
+  logId: number;
+  result: {
+    is_chat: boolean;
+    person?: { id: number | string; name: string };
+    turn?: { id: number | string; topic: string };
+    messages?: { role: string; content: string }[];
+    trace_id?: string;
+    task_candidate?: TaskCandidate | null;
+  };
+}
+
+interface SuggestionResult {
+  suggestion: string;
+  suggestions: string[];
+  personName: string;
+}
+
+interface SuggestionPanel {
+  title: string;
+  description: string;
+  suggestion?: string;
+  error?: boolean;
+}
+
 // ---- 截图转 base64（通过 Rust command，避免 fs scope 限制）----
 
 async function imagePathToBase64(path: string): Promise<string> {
@@ -61,7 +96,11 @@ async function imagePathToBase64(path: string): Promise<string> {
 
 // ---- 核心流程 ----
 
-async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandidateHandler) {
+async function runAnalyzePipeline(
+  event: Omit<EnterEvent, "entry_id">,
+  onTaskCandidate: TaskCandidateHandler,
+  entryId?: number
+): Promise<AnalyzePipelineResult | null> {
   const pipelineStartedAt = performance.now();
   console.log("[bubble] pipeline.start", JSON.stringify(event));
 
@@ -84,7 +123,7 @@ async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandida
     });
     if (!logResp.ok) {
       console.error("[bubble] POST /logs failed:", logResp.status, await logResp.text());
-      return;
+      return null;
     }
     const logData = await logResp.json() as ApiResponse<{ id: number }>;
     logId = logData.data.id;
@@ -94,7 +133,7 @@ async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandida
     });
   } catch (e) {
     console.error("[bubble] POST /logs error:", e);
-    return;
+    return null;
   }
 
   // 2. 只有微信 + 有截图才触发 AI 分析
@@ -104,7 +143,7 @@ async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandida
       is_wechat: event.is_wechat,
       has_screenshot: Boolean(event.screenshot_path),
     });
-    return;
+    return null;
   }
 
   // 3. 读取截图 → base64
@@ -123,7 +162,7 @@ async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandida
     });
   } catch (e) {
     console.error("[bubble] read screenshot failed:", e);
-    return;
+    return null;
   }
 
   // 4. POST /analyze — 让后端调 AI 分析
@@ -145,7 +184,7 @@ async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandida
     });
     if (!analyzeResp.ok) {
       console.error("[bubble] POST /analyze failed:", analyzeResp.status, await analyzeResp.text());
-      return;
+      return null;
     }
     const analyzeData = await analyzeResp.json() as ApiResponse<
       {
@@ -173,20 +212,28 @@ async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandida
     }
 
     // 5. 回传给 Rust（更新内存中的 log store，触发 ai-result-updated 事件刷新 UI）
-    await invoke("report_ai_result", {
-      entryId: event.entry_id,
-      partner: result.person?.name ?? "",
-      topic: result.turn?.topic ?? "",
-      isChat: result.is_chat,
-    });
+    if (entryId != null) {
+      await invoke("report_ai_result", {
+        entryId,
+        partner: result.person?.name ?? "",
+        topic: result.turn?.topic ?? "",
+        isChat: result.is_chat,
+      });
+    }
     console.log("[bubble] pipeline.success", {
       log_id: logId,
       trace_id: result.trace_id,
       duration_ms: Math.round(performance.now() - pipelineStartedAt),
     });
+    return { logId, result };
   } catch (e) {
     console.error("[bubble] POST /analyze error:", e);
+    return null;
   }
+}
+
+async function processEnterEvent(event: EnterEvent, onTaskCandidate: TaskCandidateHandler) {
+  await runAnalyzePipeline(event, onTaskCandidate, event.entry_id);
 }
 
 // ---- Bubble UI ----
@@ -195,10 +242,16 @@ export default function Bubble() {
   const containerRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const taskPopoverRef = useRef<HTMLDivElement>(null);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
+  const suggestionPanelRef = useRef<HTMLDivElement>(null);
   const [taskCandidate, setTaskCandidate] = useState<TaskCandidate | null>(null);
+  const [suggestionPanel, setSuggestionPanel] = useState<SuggestionPanel | null>(null);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [mockPreview, setMockPreview] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const suggestionTimerRef = useRef<number | null>(null);
 
   const clearAutoCreateTimer = () => {
     if (timerRef.current != null) {
@@ -217,6 +270,22 @@ export default function Bubble() {
     clearAutoCreateTimer();
     setTaskCandidate(null);
     setMockPreview(false);
+  };
+
+  const clearSuggestionPanelTimer = () => {
+    if (suggestionTimerRef.current != null) {
+      window.clearTimeout(suggestionTimerRef.current);
+      suggestionTimerRef.current = null;
+    }
+  };
+
+  const showSuggestionPanel = (panel: SuggestionPanel) => {
+    clearSuggestionPanelTimer();
+    setSuggestionPanel(panel);
+    suggestionTimerRef.current = window.setTimeout(() => {
+      setSuggestionPanel(null);
+      suggestionTimerRef.current = null;
+    }, 6500);
   };
 
   const confirmTask = async (candidate: TaskCandidate) => {
@@ -267,6 +336,7 @@ export default function Bubble() {
 
     return () => {
       clearAutoCreateTimer();
+      clearSuggestionPanelTimer();
       unlistenCount.then((f) => f());
       unlistenEnter.then((f) => f());
       unlistenMockTask.then((f) => f());
@@ -284,7 +354,12 @@ export default function Bubble() {
         if (!container) return;
 
         const containerRect = container.getBoundingClientRect();
-        const elements = [bubbleRef.current, taskPopoverRef.current].filter(
+        const elements = [
+          bubbleRef.current,
+          taskPopoverRef.current,
+          actionMenuRef.current,
+          suggestionPanelRef.current,
+        ].filter(
           (element): element is HTMLDivElement => Boolean(element)
         );
         const regions = elements.map((element) => {
@@ -317,7 +392,7 @@ export default function Bubble() {
       window.removeEventListener("resize", syncHitRegions);
       invoke("set_bubble_hit_regions", { regions: [] }).catch(() => undefined);
     };
-  }, [taskCandidate]);
+  }, [taskCandidate, actionMenuOpen, suggestionPanel]);
 
   useEffect(() => {
     clearAutoCreateTimer();
@@ -341,6 +416,98 @@ export default function Bubble() {
     await invoke("show_main_window");
   };
 
+  const generateReplySuggestion = async () => {
+    if (suggestionLoading) return;
+    setActionMenuOpen(false);
+    setSuggestionPanel(null);
+    setSuggestionLoading(true);
+    clearSuggestionPanelTimer();
+
+    try {
+      const captured = await invoke<CaptureContext>("capture_current_context");
+      if (!captured.screenshot_path) {
+        showSuggestionPanel({
+          title: "生成失败",
+          description: "没有拿到截图，请检查截图权限。",
+          error: true,
+        });
+        return;
+      }
+
+      const analyzed = await runAnalyzePipeline(
+        {
+          occurred_at: captured.occurred_at,
+          app_name: captured.app_name,
+          app_bundle_id: captured.app_bundle_id,
+          is_send: captured.is_send,
+          is_wechat: captured.is_wechat,
+          screenshot_path: captured.screenshot_path,
+        },
+        displayTaskCandidate
+      );
+
+      const personId = analyzed?.result.person?.id;
+      if (!analyzed?.result.is_chat || !personId) {
+        showSuggestionPanel({
+          title: "未识别到聊天对象",
+          description: "请把聊天窗口放到前台后再试。",
+          error: true,
+        });
+        return;
+      }
+
+      const suggestResp = await fetch(`${API_BASE}/suggest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ person_id: Number(personId), style: "cautious" }),
+      });
+      if (!suggestResp.ok) {
+        console.error("[bubble] POST /suggest failed:", suggestResp.status, await suggestResp.text());
+        showSuggestionPanel({
+          title: "生成失败",
+          description: "AI 没有返回可用建议。",
+          error: true,
+        });
+        return;
+      }
+      const suggestData = await suggestResp.json() as ApiResponse<{
+        person_name: string;
+        suggestions: string[];
+      }>;
+      const suggestions = suggestData.data.suggestions ?? [];
+      const suggestion = suggestions[0]?.trim();
+      if (!suggestion) {
+        showSuggestionPanel({
+          title: "生成失败",
+          description: "AI 没有返回可用建议。",
+          error: true,
+        });
+        return;
+      }
+
+      const result: SuggestionResult = {
+        suggestion,
+        suggestions,
+        personName: suggestData.data.person_name,
+      };
+      await writeText(result.suggestion);
+      showSuggestionPanel({
+        title: "回复建议已复制",
+        description: `已基于你和 ${result.personName} 的聊天生成建议。`,
+        suggestion: result.suggestion,
+      });
+    } catch (e) {
+      console.error("[bubble] generate reply suggestion failed:", e);
+      showSuggestionPanel({
+        title: "生成失败",
+        description: "生成流程出错，请看控制台日志。",
+        error: true,
+      });
+    } finally {
+      setSuggestionLoading(false);
+    }
+  };
+
   const handleDragStart = async (event: React.PointerEvent) => {
     if (event.button !== 0) return;
     await getCurrentWindow().startDragging().catch((e) =>
@@ -350,6 +517,33 @@ export default function Bubble() {
 
   return (
     <div className="bubble-container" ref={containerRef}>
+      {actionMenuOpen && !suggestionLoading && (
+        <div
+          className="bubble-action-menu"
+          ref={actionMenuRef}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseEnter={() => setActionMenuOpen(true)}
+          onMouseLeave={() => setActionMenuOpen(false)}
+        >
+          <button onClick={generateReplySuggestion}>生成回复建议</button>
+        </div>
+      )}
+      {suggestionPanel && (
+        <div
+          className={`task-confirm-popover suggestion-popover ${suggestionPanel.error ? "error" : ""}`}
+          ref={suggestionPanelRef}
+          onPointerDown={handleDragStart}
+        >
+          <div className="task-confirm-copy">
+            <div className="task-confirm-eyebrow">{suggestionPanel.title}</div>
+            <div className="task-confirm-title">{suggestionPanel.description}</div>
+            {suggestionPanel.suggestion && (
+              <div className="task-confirm-description">{suggestionPanel.suggestion}</div>
+            )}
+          </div>
+          <div className="task-confirm-progress" />
+        </div>
+      )}
       {taskCandidate && (
         <div
           className="task-confirm-popover"
@@ -384,10 +578,12 @@ export default function Bubble() {
       )}
       <div
         id="bubble-circle"
-        className="bubble"
+        className={`bubble ${suggestionLoading ? "loading" : ""}`}
         ref={bubbleRef}
         onClick={handleClick}
         onPointerDown={handleDragStart}
+        onMouseEnter={() => setActionMenuOpen(true)}
+        onMouseLeave={() => setActionMenuOpen(false)}
         title="Open Percent"
       >
         <svg className="bubble-icon" viewBox="0 0 24 24" aria-hidden="true">

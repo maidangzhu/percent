@@ -15,6 +15,7 @@
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.2.16",
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "react": "^19.0.0",

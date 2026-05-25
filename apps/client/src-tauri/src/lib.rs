@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
+use chrono::Local;
+use serde::Serialize;
 use tauri::{Emitter, Manager, Wry};
 
 mod keyboard;
@@ -9,14 +11,16 @@ mod frontapp;
 mod window;
 mod screenshotter;
 
-use keyboard::start_keyboard_listener;
+use keyboard::{start_keyboard_listener, ShortcutConfig};
 use logger::LogStore;
+use screenshotter::capture_screen;
 use window::{set_bubble_hit_regions, setup_windows, BubbleHitRegions};
 
 pub struct AppState {
     pub log_store: Mutex<LogStore>,
     pub screenshot_enabled: AtomicBool,
     pub log_dir: PathBuf,
+    pub shortcut: RwLock<ShortcutConfig>,
 }
 
 impl Default for AppState {
@@ -27,9 +31,28 @@ impl Default for AppState {
         Self {
             log_store: Mutex::new(LogStore::default()),
             screenshot_enabled: AtomicBool::new(true),
+            shortcut: RwLock::new(load_shortcut_config(&log_dir)),
             log_dir,
         }
     }
+}
+
+fn settings_file(log_dir: &PathBuf) -> PathBuf {
+    log_dir.join("settings.json")
+}
+
+fn load_shortcut_config(log_dir: &PathBuf) -> ShortcutConfig {
+    let path = settings_file(log_dir);
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<ShortcutConfig>(&content).ok())
+        .unwrap_or_default()
+}
+
+fn save_shortcut_config(log_dir: &PathBuf, shortcut: &ShortcutConfig) -> Result<(), String> {
+    std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
+    let content = serde_json::to_string_pretty(shortcut).map_err(|e| e.to_string())?;
+    std::fs::write(settings_file(log_dir), content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -87,6 +110,80 @@ fn class_ref(name: &str) -> *mut objc2_foundation::NSObject {
 fn get_enter_count(state: tauri::State<AppState>) -> usize {
     let store = state.log_store.lock().unwrap();
     store.count()
+}
+
+#[tauri::command]
+fn get_shortcut_config(state: tauri::State<AppState>) -> ShortcutConfig {
+    state
+        .shortcut
+        .read()
+        .map(|shortcut| shortcut.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn set_shortcut_config(shortcut: ShortcutConfig, state: tauri::State<AppState>) -> Result<ShortcutConfig, String> {
+    shortcut.validate()?;
+    save_shortcut_config(&state.log_dir, &shortcut)?;
+    if let Ok(mut current) = state.shortcut.write() {
+        *current = shortcut.clone();
+    }
+    eprintln!("[settings] shortcut updated: {}", shortcut.label());
+    Ok(shortcut)
+}
+
+#[tauri::command]
+fn clear_local_cache(state: tauri::State<AppState>) -> Result<usize, String> {
+    let mut removed = 0_usize;
+    let screenshots_dir = state.log_dir.join("screenshots");
+    if screenshots_dir.exists() {
+        for entry in std::fs::read_dir(&screenshots_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_file() {
+                std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+                removed += 1;
+            }
+        }
+    }
+
+    {
+        let mut store = state.log_store.lock().unwrap();
+        removed += store.clear_local_files().map_err(|e| e.to_string())?;
+    }
+
+    eprintln!("[settings] cleared local cache files: {}", removed);
+    Ok(removed)
+}
+
+#[derive(Clone, Serialize)]
+struct CaptureContext {
+    occurred_at: String,
+    app_name: String,
+    app_bundle_id: String,
+    is_send: bool,
+    is_wechat: bool,
+    screenshot_path: Option<String>,
+}
+
+#[tauri::command]
+fn capture_current_context(state: tauri::State<AppState>) -> CaptureContext {
+    let front = frontapp::get_frontmost_app();
+    let is_send = frontapp::is_send_action(&front);
+    let is_wechat = front.bundle_id == "com.tencent.xinWeChat"
+        || front.name.to_lowercase().contains("wechat")
+        || front.name.contains("微信");
+    let screenshot_path = capture_screen(&state.log_dir)
+        .map(|path| path.to_string_lossy().to_string());
+
+    CaptureContext {
+        occurred_at: Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        app_name: front.name,
+        app_bundle_id: front.bundle_id,
+        is_send,
+        is_wechat,
+        screenshot_path,
+    }
 }
 
 #[tauri::command]
@@ -171,12 +268,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::default())
         .manage(BubbleHitRegions::default())
         .invoke_handler(tauri::generate_handler![
             get_logs,
             show_main_window,
             get_enter_count,
+            get_shortcut_config,
+            set_shortcut_config,
+            clear_local_cache,
+            capture_current_context,
             set_screenshot_enabled,
             get_screenshot_enabled,
             report_ai_result,

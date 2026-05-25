@@ -12,6 +12,7 @@
     "core:window:allow-set-size",
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
+    "clipboard-manager:allow-write-text",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-read-text-file",
