@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Streamdown } from "streamdown";
-import "streamdown/styles.css";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ---- 类型定义 ----
 
@@ -861,7 +861,9 @@ export default function Bubble() {
               agentMessages.map((message) => (
                 <div key={message.id} className={`agent-message ${message.role}`}>
                   {message.role === "assistant" ? (
-                    <Streamdown>{message.content}</Streamdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.content}
+                    </ReactMarkdown>
                   ) : (
                     message.content
                   )}
