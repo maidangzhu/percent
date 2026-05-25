@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
 use crate::frontapp::{get_frontmost_app, is_send_action};
-use crate::screenshotter::capture_screen;
+use crate::screenshotter::capture_screen_without_bubble;
 use crate::AppState;
 
 const WECHAT_BUNDLE_ID: &str = "com.tencent.xinWeChat";
@@ -204,7 +204,7 @@ fn handle_enter_pressed(app_handle: &tauri::AppHandle) {
         let bundle_id = front.bundle_id.clone();
 
         thread::spawn(move || {
-            let screenshot_path = capture_screen(&log_dir)
+            let screenshot_path = capture_screen_without_bubble(&app_handle_clone, &log_dir)
                 .map(|p| p.to_string_lossy().to_string());
 
             eprintln!("[keyboard] screenshot: {:?}", screenshot_path);

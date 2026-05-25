@@ -99,6 +99,7 @@ chatRouter.post("/", async (c) => {
   }
 
   const modelId = body.model ?? DEFAULT_MODEL;
+  const temperature = modelId === "kimi-k2.6" ? 0.6 : body.temperature;
   const moonshot = createOpenAICompatible({
     name: "moonshot",
     baseURL: MOONSHOT_BASE_URL,
@@ -126,7 +127,7 @@ chatRouter.post("/", async (c) => {
       messages: normalizeMessages(body.messages),
       tools,
       toolChoice,
-      temperature: body.temperature,
+      temperature,
       maxOutputTokens: body.max_output_tokens,
       experimental_include: {
         requestBody: false,

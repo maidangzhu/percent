@@ -13,8 +13,8 @@ mod screenshotter;
 
 use keyboard::{start_keyboard_listener, ShortcutConfig};
 use logger::LogStore;
-use screenshotter::capture_screen;
-use window::{set_bubble_hit_regions, setup_windows, BubbleHitRegions};
+use screenshotter::capture_screen_without_bubble;
+use window::{move_bubble_by_drag, set_bubble_hit_regions, setup_windows, BubbleHitRegions};
 
 pub struct AppState {
     pub log_store: Mutex<LogStore>,
@@ -175,13 +175,16 @@ struct CaptureContext {
 }
 
 #[tauri::command]
-fn capture_current_context(state: tauri::State<AppState>) -> CaptureContext {
+fn capture_current_context(
+    app: tauri::AppHandle<Wry>,
+    state: tauri::State<AppState>,
+) -> CaptureContext {
     let front = frontapp::get_frontmost_app();
     let is_send = frontapp::is_send_action(&front);
     let is_wechat = front.bundle_id == "com.tencent.xinWeChat"
         || front.name.to_lowercase().contains("wechat")
         || front.name.contains("微信");
-    let screenshot_path = capture_screen(&state.log_dir)
+    let screenshot_path = capture_screen_without_bubble(&app, &state.log_dir)
         .map(|path| path.to_string_lossy().to_string());
 
     CaptureContext {
@@ -292,6 +295,7 @@ pub fn run() {
             report_ai_result,
             emit_tasks_updated,
             set_mock_task_preview,
+            move_bubble_by_drag,
             set_bubble_hit_regions,
             read_file_base64,
         ])

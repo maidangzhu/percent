@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 use chrono::Local;
+use tauri::Manager;
 
 /// 截取当前屏幕，保存到 ~/.percent-tracker/screenshots/
 /// 文件名格式: screenshot_2026-05-22_15-30-00-123.png
@@ -35,6 +37,40 @@ pub fn capture_screen(log_dir: &PathBuf) -> Option<PathBuf> {
         Err(e) => {
             eprintln!("[screenshot] failed to run screencapture: {}", e);
             None
+        }
+    }
+}
+
+pub fn capture_screen_without_bubble(
+    app_handle: &tauri::AppHandle,
+    log_dir: &PathBuf,
+) -> Option<PathBuf> {
+    let bubble = app_handle.get_webview_window("bubble");
+
+    if let Some(window) = &bubble {
+        let _ = window.hide();
+    }
+
+    std::thread::sleep(Duration::from_millis(80));
+    let screenshot = capture_screen(log_dir);
+
+    if let Some(window) = &bubble {
+        let _ = window.show();
+        #[cfg(target_os = "macos")]
+        restore_bubble_window_level(window);
+    }
+
+    screenshot
+}
+
+#[cfg(target_os = "macos")]
+fn restore_bubble_window_level(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2_foundation::NSObject;
+
+    if let Ok(ns_window) = window.ns_window() {
+        unsafe {
+            let _: () = msg_send![ns_window as *mut NSObject, setLevel: 25_isize];
         }
     }
 }

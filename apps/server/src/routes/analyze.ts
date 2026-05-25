@@ -142,9 +142,11 @@ analyzeRouter.post("/", async (c) => {
     occurred_at: string;
     app_name: string;
     image_base64: string;
+    detect_task?: boolean;
   }>();
 
   const { log_id: logId, occurred_at, app_name, image_base64 } = body;
+  const shouldDetectTask = body.detect_task ?? true;
   const traceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (!logId || !image_base64) {
@@ -162,6 +164,7 @@ analyzeRouter.post("/", async (c) => {
     app_name,
     occurred_at,
     image_base64_chars: image_base64.length,
+    detect_task: shouldDetectTask,
   });
 
   let result: AnalyzeResult | null;
@@ -296,16 +299,25 @@ analyzeRouter.post("/", async (c) => {
       duration_ms: elapsedMs(turnStartedAt),
     });
 
-    taskCandidate = await detectTaskCandidate({
-      traceId,
-      logId,
-      personId: person.id,
-      personName: person.name,
-      turnId: turn.id,
-      occurredAt: new Date(occurred_at),
-      contextMessages: [...existingMessages, ...newMessages],
-      newMessages,
-    });
+    if (shouldDetectTask) {
+      taskCandidate = await detectTaskCandidate({
+        traceId,
+        logId,
+        personId: person.id,
+        personName: person.name,
+        turnId: turn.id,
+        occurredAt: new Date(occurred_at),
+        contextMessages: [...existingMessages, ...newMessages],
+        newMessages,
+      });
+    } else {
+      logInfo("analyze.task.skipped", {
+        trace_id: traceId,
+        log_id: logId,
+        person_id: person.id,
+        turn_id: turn.id,
+      });
+    }
   } catch (error) {
     logError("analyze.db.error", {
       trace_id: traceId,
