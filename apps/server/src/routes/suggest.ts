@@ -27,10 +27,10 @@ const STYLE_NAMES: Record<Style, string> = {
 };
 
 // POST /suggest
-// Body: { person_id: number, style: Style }
+// Body: { person_id: string, style: Style }
 suggestRouter.post("/", async (c) => {
   const startedAt = Date.now();
-  const body = await c.req.json<{ person_id: number; style: Style }>();
+  const body = await c.req.json<{ person_id: string; style: Style }>();
   const { person_id, style } = body;
   const traceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -44,7 +44,7 @@ suggestRouter.post("/", async (c) => {
   }
 
   const person = await prisma.person.findUnique({
-    where: { id: BigInt(person_id) },
+    where: { id: person_id },
   });
   if (!person) return c.json({ error: "person not found" }, 404);
 

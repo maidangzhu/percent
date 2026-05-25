@@ -25,9 +25,7 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        let log_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("percent-tracker");
+        let log_dir = persistent_dir();
         Self {
             log_store: Mutex::new(LogStore::default()),
             screenshot_enabled: AtomicBool::new(true),
@@ -35,6 +33,16 @@ impl Default for AppState {
             log_dir,
         }
     }
+}
+
+fn persistent_dir() -> PathBuf {
+    std::env::var("PERCENT_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".percent-tracker")
+        })
 }
 
 fn settings_file(log_dir: &PathBuf) -> PathBuf {

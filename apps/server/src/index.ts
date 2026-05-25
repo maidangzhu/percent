@@ -12,6 +12,7 @@ import { suggestRouter } from "./routes/suggest.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { logInfo } from "./lib/appLogger.js";
 import { gatewayErrorHandler, responseGateway } from "./middleware/responseGateway.js";
+import { initializeLocalDatabase } from "./db/init.js";
 
 const app = new Hono();
 
@@ -31,6 +32,8 @@ app.route("/tasks", tasksRouter);
 
 const PORT = Number(process.env.PORT ?? 3000);
 
+const db = await initializeLocalDatabase();
+
 serve({ fetch: app.fetch, port: PORT }, () => {
-  logInfo("server.started", { url: `http://localhost:${PORT}` });
+  logInfo("server.started", { url: `http://localhost:${PORT}`, database_path: db.path });
 });

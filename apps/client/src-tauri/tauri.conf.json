@@ -24,6 +24,7 @@
         "closable": false,
         "decorations": false,
         "transparent": true,
+        "acceptFirstMouse": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visibleOnAllWorkspaces": true,

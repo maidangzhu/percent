@@ -25,6 +25,11 @@ interface CaptureContext {
   screenshot_path: string | null;
 }
 
+interface BubbleNativeHoverPayload {
+  name: string;
+  hovering: boolean;
+}
+
 // ---- 配置 ----
 
 const API_BASE = "http://localhost:3000";
@@ -64,7 +69,7 @@ const MOCK_TASK_CANDIDATE: TaskCandidate = {
 type TaskCandidateHandler = (candidate: TaskCandidate, isMockPreview?: boolean) => void;
 
 interface AnalyzePipelineResult {
-  logId: number;
+  logId: string;
   result: {
     is_chat: boolean;
     person?: { id: number | string; name: string };
@@ -99,13 +104,14 @@ async function imagePathToBase64(path: string): Promise<string> {
 async function runAnalyzePipeline(
   event: Omit<EnterEvent, "entry_id">,
   onTaskCandidate: TaskCandidateHandler,
-  entryId?: number
+  entryId?: number,
+  options: { forceAnalyze?: boolean; fallbackAppName?: string } = {}
 ): Promise<AnalyzePipelineResult | null> {
   const pipelineStartedAt = performance.now();
   console.log("[bubble] pipeline.start", JSON.stringify(event));
 
   // 1. POST /logs — 创建日志条目，拿到 log_id
-  let logId: number;
+  let logId: string;
   try {
     const startedAt = performance.now();
     console.log("[bubble] logs.create.start");
@@ -125,7 +131,7 @@ async function runAnalyzePipeline(
       console.error("[bubble] POST /logs failed:", logResp.status, await logResp.text());
       return null;
     }
-    const logData = await logResp.json() as ApiResponse<{ id: number }>;
+    const logData = await logResp.json() as ApiResponse<{ id: string }>;
     logId = logData.data.id;
     console.log("[bubble] logs.create.success", {
       log_id: logId,
@@ -137,11 +143,12 @@ async function runAnalyzePipeline(
   }
 
   // 2. 只有微信 + 有截图才触发 AI 分析
-  if (!event.is_wechat || !event.screenshot_path) {
+  if ((!event.is_wechat && !options.forceAnalyze) || !event.screenshot_path) {
     console.log("[bubble] analyze.skip", {
       log_id: logId,
       is_wechat: event.is_wechat,
       has_screenshot: Boolean(event.screenshot_path),
+      force_analyze: Boolean(options.forceAnalyze),
     });
     return null;
   }
@@ -178,7 +185,7 @@ async function runAnalyzePipeline(
       body: JSON.stringify({
         log_id: logId,
         occurred_at: event.occurred_at,
-        app_name: event.app_name,
+        app_name: options.fallbackAppName ?? event.app_name,
         image_base64: imageBase64,
       }),
     });
@@ -189,8 +196,8 @@ async function runAnalyzePipeline(
     const analyzeData = await analyzeResp.json() as ApiResponse<
       {
         is_chat: boolean;
-        person?: { id: number; name: string };
-        turn?: { id: number; topic: string };
+        person?: { id: string; name: string };
+        turn?: { id: string; topic: string };
         messages?: { role: string; content: string }[];
         trace_id?: string;
         task_candidate?: TaskCandidate | null;
@@ -252,6 +259,7 @@ export default function Bubble() {
   const [confirming, setConfirming] = useState(false);
   const timerRef = useRef<number | null>(null);
   const suggestionTimerRef = useRef<number | null>(null);
+  const actionMenuCloseTimerRef = useRef<number | null>(null);
 
   const clearAutoCreateTimer = () => {
     if (timerRef.current != null) {
@@ -277,6 +285,28 @@ export default function Bubble() {
       window.clearTimeout(suggestionTimerRef.current);
       suggestionTimerRef.current = null;
     }
+  };
+
+  const clearActionMenuCloseTimer = () => {
+    if (actionMenuCloseTimerRef.current != null) {
+      window.clearTimeout(actionMenuCloseTimerRef.current);
+      actionMenuCloseTimerRef.current = null;
+    }
+  };
+
+  const openActionMenu = () => {
+    clearActionMenuCloseTimer();
+    if (!suggestionLoading) {
+      setActionMenuOpen(true);
+    }
+  };
+
+  const scheduleCloseActionMenu = () => {
+    clearActionMenuCloseTimer();
+    actionMenuCloseTimerRef.current = window.setTimeout(() => {
+      setActionMenuOpen(false);
+      actionMenuCloseTimerRef.current = null;
+    }, 180);
   };
 
   const showSuggestionPanel = (panel: SuggestionPanel) => {
@@ -337,6 +367,7 @@ export default function Bubble() {
     return () => {
       clearAutoCreateTimer();
       clearSuggestionPanelTimer();
+      clearActionMenuCloseTimer();
       unlistenCount.then((f) => f());
       unlistenEnter.then((f) => f());
       unlistenMockTask.then((f) => f());
@@ -355,16 +386,17 @@ export default function Bubble() {
 
         const containerRect = container.getBoundingClientRect();
         const elements = [
-          bubbleRef.current,
-          taskPopoverRef.current,
-          actionMenuRef.current,
-          suggestionPanelRef.current,
+          { name: "bubble", element: bubbleRef.current },
+          { name: "task", element: taskPopoverRef.current },
+          { name: "menu", element: actionMenuRef.current },
+          { name: "suggestion", element: suggestionPanelRef.current },
         ].filter(
-          (element): element is HTMLDivElement => Boolean(element)
+          (entry): entry is { name: string; element: HTMLDivElement } => Boolean(entry.element)
         );
-        const regions = elements.map((element) => {
+        const regions = elements.map(({ name, element }) => {
           const rect = element.getBoundingClientRect();
           return {
+            name,
             x: rect.left - containerRect.left,
             y: rect.top - containerRect.top,
             width: rect.width,
@@ -395,6 +427,25 @@ export default function Bubble() {
   }, [taskCandidate, actionMenuOpen, suggestionPanel]);
 
   useEffect(() => {
+    const unlistenNativeHover = listen<BubbleNativeHoverPayload>("bubble-native-hover", (event) => {
+      if (event.payload.name === "bubble" && event.payload.hovering && !suggestionLoading) {
+        openActionMenu();
+      } else if (event.payload.name === "menu" && event.payload.hovering) {
+        openActionMenu();
+      } else if (
+        (event.payload.name === "bubble" || event.payload.name === "menu") &&
+        !event.payload.hovering
+      ) {
+        scheduleCloseActionMenu();
+      }
+    });
+
+    return () => {
+      unlistenNativeHover.then((f) => f());
+    };
+  }, [suggestionLoading]);
+
+  useEffect(() => {
     clearAutoCreateTimer();
     if (taskCandidate && !mockPreview) {
       timerRef.current = window.setTimeout(() => {
@@ -418,6 +469,7 @@ export default function Bubble() {
 
   const generateReplySuggestion = async () => {
     if (suggestionLoading) return;
+    clearActionMenuCloseTimer();
     setActionMenuOpen(false);
     setSuggestionPanel(null);
     setSuggestionLoading(true);
@@ -440,10 +492,12 @@ export default function Bubble() {
           app_name: captured.app_name,
           app_bundle_id: captured.app_bundle_id,
           is_send: captured.is_send,
-          is_wechat: captured.is_wechat,
+          is_wechat: true,
           screenshot_path: captured.screenshot_path,
         },
-        displayTaskCandidate
+        displayTaskCandidate,
+        undefined,
+        { forceAnalyze: true, fallbackAppName: "WeChat" }
       );
 
       const personId = analyzed?.result.person?.id;
@@ -459,7 +513,7 @@ export default function Bubble() {
       const suggestResp = await fetch(`${API_BASE}/suggest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ person_id: Number(personId), style: "cautious" }),
+        body: JSON.stringify({ person_id: personId, style: "cautious" }),
       });
       if (!suggestResp.ok) {
         console.error("[bubble] POST /suggest failed:", suggestResp.status, await suggestResp.text());
@@ -522,8 +576,8 @@ export default function Bubble() {
           className="bubble-action-menu"
           ref={actionMenuRef}
           onPointerDown={(event) => event.stopPropagation()}
-          onMouseEnter={() => setActionMenuOpen(true)}
-          onMouseLeave={() => setActionMenuOpen(false)}
+          onMouseEnter={openActionMenu}
+          onMouseLeave={scheduleCloseActionMenu}
         >
           <button onClick={generateReplySuggestion}>生成回复建议</button>
         </div>
@@ -582,8 +636,8 @@ export default function Bubble() {
         ref={bubbleRef}
         onClick={handleClick}
         onPointerDown={handleDragStart}
-        onMouseEnter={() => setActionMenuOpen(true)}
-        onMouseLeave={() => setActionMenuOpen(false)}
+        onMouseEnter={openActionMenu}
+        onMouseLeave={scheduleCloseActionMenu}
         title="Open Percent"
       >
         <svg className="bubble-icon" viewBox="0 0 24 24" aria-hidden="true">

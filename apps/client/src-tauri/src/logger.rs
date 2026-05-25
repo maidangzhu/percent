@@ -22,9 +22,7 @@ pub struct LogStore {
 
 impl Default for LogStore {
     fn default() -> Self {
-        let log_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("percent-tracker");
+        let log_dir = persistent_dir();
 
         let _ = create_dir_all(&log_dir);
 
@@ -37,6 +35,16 @@ impl Default for LogStore {
         store.load_existing();
         store
     }
+}
+
+fn persistent_dir() -> PathBuf {
+    std::env::var("PERCENT_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".percent-tracker")
+        })
 }
 
 impl LogStore {

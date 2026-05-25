@@ -13,10 +13,10 @@ interface TaskCandidate {
 
 interface DetectTasksOptions {
   traceId: string;
-  logId: bigint;
-  personId: bigint;
+  logId: string;
+  personId: string;
   personName: string;
-  turnId: bigint;
+  turnId: string;
   occurredAt: Date;
   contextMessages: { role: string; content: string }[];
   newMessages: { role: string; content: string }[];
@@ -162,10 +162,10 @@ export async function detectTaskCandidate({
   });
 
   return {
-    person_id: personId.toString(),
+    person_id: personId,
     person_name: personName,
-    log_id: logId.toString(),
-    source_turn_id: turnId.toString(),
+    log_id: logId,
+    source_turn_id: turnId,
     title: candidate.title.trim(),
     description: candidate.description?.trim() ?? "",
     due_at: safeDueAt,

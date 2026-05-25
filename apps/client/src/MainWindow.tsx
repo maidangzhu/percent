@@ -17,7 +17,7 @@ interface ApiResponse<T> {
 
 // GET /logs 返回的每行
 interface LogRow {
-  id: number;
+  id: string;
   occurred_at: string;
   app_name: string;
   app_bundle_id: string;
@@ -25,15 +25,15 @@ interface LogRow {
   is_wechat: boolean;
   screenshot_path: string | null;
   // JOIN 字段（可能为 null）
-  turn_id: number | null;
+  turn_id: string | null;
   topic: string | null;
   partner_name: string | null;
-  person_id: number | null;
+  person_id: string | null;
 }
 
 // GET /people 返回的每个联系人
 interface PersonSummary {
-  id: number;
+  id: string;
   name: string;
   client_app: string;
   created_at: string;
@@ -42,27 +42,34 @@ interface PersonSummary {
   last_chat_at: string | null;
 }
 
-// GET /people/:id 返回的详情（含 turns）
+// GET /people/:id 返回的详情
 interface Message {
   role: "self" | "other";
   content: string;
 }
 
+interface MergedPersonMessage extends Message {
+  turn_id?: number | string;
+  topic?: string;
+  captured_at?: string;
+}
+
 interface TurnDetail {
-  id: number;
-  log_id: number;
+  id: string;
+  log_id: string;
   topic: string;
   captured_at: string;
   messages: Message[] | null;
 }
 
 interface PersonDetail extends PersonSummary {
+  messages?: MergedPersonMessage[];
   turns: TurnDetail[];
 }
 
 interface TaskRow {
-  id: number;
-  person_id: number | null;
+  id: string;
+  person_id: string | null;
   person_name: string | null;
   title: string;
   description: string;
@@ -354,7 +361,7 @@ function SettingsView({
 
 function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => void }) {
   const [newTitle, setNewTitle] = useState("");
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [mockPreviewOn, setMockPreviewOn] = useState(false);
 
@@ -371,7 +378,7 @@ function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => vo
     onRefresh();
   };
 
-  const updateTask = async (id: number, body: Partial<TaskRow>) => {
+  const updateTask = async (id: string, body: Partial<TaskRow>) => {
     await fetch(`${API_BASE}/tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -380,7 +387,7 @@ function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => vo
     onRefresh();
   };
 
-  const deleteTask = async (id: number) => {
+  const deleteTask = async (id: string) => {
     await fetch(`${API_BASE}/tasks/${id}`, { method: "DELETE" });
     onRefresh();
   };
@@ -502,8 +509,8 @@ function LogsView({
   screenshotEnabled: boolean;
   onToggleScreenshot: () => void;
 }) {
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [detailCache, setDetailCache] = useState<Record<number, TurnDetail & { partner_name: string }>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, TurnDetail & { partner_name: string }>>({});
   const sendCount = logs.filter((l) => l.is_send).length;
 
   const loadDetail = async (log: LogRow) => {
@@ -687,7 +694,7 @@ const SUGGEST_STYLES: { key: SuggestStyle; label: string; desc: string }[] = [
 // ---- People 视图 ----
 
 function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh: () => void }) {
-  const [selectedId, setSelectedId] = useState<number | null>(
+  const [selectedId, setSelectedId] = useState<string | null>(
     people[0]?.id ?? null
   );
   const [personDetail, setPersonDetail] = useState<PersonDetail | null>(null);
@@ -699,7 +706,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  const loadPersonDetail = async (id: number) => {
+  const loadPersonDetail = async (id: string) => {
     setLoading(true);
     try {
       const resp = await fetch(`${API_BASE}/people/${id}`);
@@ -724,7 +731,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
     }
   }, [people]);
 
-  const handleSelectPerson = (id: number) => {
+  const handleSelectPerson = (id: string) => {
     setSelectedId(id);
     setPersonDetail(null);
     setSuggestions([]);
@@ -882,25 +889,19 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
               )}
             </div>
 
-            <div className="turns-timeline">
-              {(personDetail.turns ?? []).map((turn) => (
-                <div key={turn.id} className="turn-card">
-                  <div className="turn-meta">
-                    <span className="turn-time">{new Date(turn.captured_at).toLocaleString()}</span>
-                    <span className="turn-topic">{turn.topic}</span>
+            <div className="chat-stream">
+              {(personDetail.messages ?? []).length === 0 ? (
+                <div className="people-empty">暂无聊天内容</div>
+              ) : (
+                (personDetail.messages ?? []).map((m, i) => (
+                  <div key={`${m.turn_id ?? "message"}-${i}`} className={`message-bubble ${m.role}`}>
+                    <span className="message-role">
+                      {m.role === "self" ? "我" : personDetail.name}
+                    </span>
+                    <span className="message-content">{m.content}</span>
                   </div>
-                  <div className="turn-messages">
-                    {(turn.messages ?? []).map((m, i) => (
-                      <div key={i} className={`message-bubble ${m.role}`}>
-                        <span className="message-role">
-                          {m.role === "self" ? "我" : personDetail.name}
-                        </span>
-                        <span className="message-content">{m.content}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </>
         ) : (

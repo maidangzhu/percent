@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { prisma } from "../db/client.js";
 import { elapsedMs, logError, logInfo } from "../lib/appLogger.js";
+import { newSnowflakeId } from "../lib/snowflake.js";
 
 export const logsRouter = new Hono();
 
@@ -13,11 +14,11 @@ logsRouter.get("/", async (c) => {
     prisma.log.findMany({
       take: limit,
       skip: offset,
-      orderBy: { id: "desc" },
+      orderBy: { occurredAt: "desc" },
       include: {
         chatTurns: {
           take: 1,
-          orderBy: { id: "desc" },
+          orderBy: { capturedAt: "desc" },
           include: { person: true },
         },
       },
@@ -28,17 +29,17 @@ logsRouter.get("/", async (c) => {
   const data = rows.map((log) => {
     const turn = log.chatTurns[0];
     return {
-      id: log.id.toString(),
+      id: log.id,
       occurred_at: log.occurredAt,
       app_name: log.appName,
       app_bundle_id: log.appBundleId,
       is_send: log.isSend,
       is_wechat: log.isWechat,
       screenshot_path: log.screenshotPath,
-      turn_id: turn?.id.toString() ?? null,
+      turn_id: turn?.id ?? null,
       topic: turn?.topic ?? null,
       partner_name: turn?.person.name ?? null,
-      person_id: turn?.person.id.toString() ?? null,
+      person_id: turn?.person.id ?? null,
     };
   });
 
@@ -70,6 +71,7 @@ logsRouter.post("/", async (c) => {
   try {
     log = await prisma.log.create({
       data: {
+        id: newSnowflakeId(),
         occurredAt: new Date(body.occurred_at),
         appName: body.app_name,
         appBundleId: body.app_bundle_id,
@@ -94,7 +96,7 @@ logsRouter.post("/", async (c) => {
   return c.json(
     {
       data: {
-        id: log.id.toString(),
+        id: log.id,
         occurred_at: log.occurredAt,
         app_name: log.appName,
         app_bundle_id: log.appBundleId,

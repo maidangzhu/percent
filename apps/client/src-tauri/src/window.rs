@@ -1,6 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
-use tauri::{App, AppHandle, LogicalPosition, Manager, Position, WebviewWindow, Wry};
+use tauri::{App, AppHandle, Emitter, LogicalPosition, Manager, Position, WebviewWindow, Wry};
 
 const BUBBLE_WIDTH: i32 = 640;
 const BUBBLE_HEIGHT: i32 = 320;
@@ -10,10 +10,17 @@ const INITIAL_HIT_TEST_GRACE_TICKS: u32 = 40;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BubbleHitRegion {
+    pub name: Option<String>,
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BubbleHoverPayload {
+    name: String,
+    hovering: bool,
 }
 
 #[derive(Clone, Default)]
@@ -57,6 +64,7 @@ pub fn setup_windows(app: &App) {
     #[cfg(target_os = "macos")]
     {
         set_window_level(&bubble, 25);
+        configure_bubble_mouse_behavior(&bubble);
     }
 
     let app_handle = app.handle().clone();
@@ -70,6 +78,7 @@ fn start_bubble_hit_test_listener(app_handle: AppHandle) {
     std::thread::spawn(move || {
         let mut last_ignore = false;
         let mut empty_region_ticks = 0_u32;
+        let mut last_hovered_region: Option<String> = None;
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(HIT_TEST_INTERVAL_MS));
@@ -86,6 +95,7 @@ fn start_bubble_hit_test_listener(app_handle: AppHandle) {
                 .map(|regions| regions.clone())
                 .unwrap_or_default();
 
+            let mut hovered_region_name: Option<String> = None;
             let ignore = if regions.is_empty() {
                 empty_region_ticks = empty_region_ticks.saturating_add(1);
                 empty_region_ticks > INITIAL_HIT_TEST_GRACE_TICKS
@@ -109,12 +119,40 @@ fn start_bubble_hit_test_listener(app_handle: AppHandle) {
                     let y_min = window_position.y as f64 + region.y * scale_factor;
                     let y_max = window_position.y as f64 + (region.y + region.height) * scale_factor;
 
-                    cursor_position.x >= x_min
+                    let contains = cursor_position.x >= x_min
                         && cursor_position.x <= x_max
                         && cursor_position.y >= y_min
-                        && cursor_position.y <= y_max
+                        && cursor_position.y <= y_max;
+                    if contains {
+                        hovered_region_name = region.name.clone();
+                    }
+                    contains
                 })
             };
+
+            if hovered_region_name != last_hovered_region {
+                if let Some(name) = last_hovered_region.take() {
+                    let _ = bubble.emit(
+                        "bubble-native-hover",
+                        BubbleHoverPayload {
+                            name,
+                            hovering: false,
+                        },
+                    );
+                }
+
+                if let Some(name) = hovered_region_name.clone() {
+                    let _ = bubble.emit(
+                        "bubble-native-hover",
+                        BubbleHoverPayload {
+                            name,
+                            hovering: true,
+                        },
+                    );
+                }
+
+                last_hovered_region = hovered_region_name;
+            }
 
             if ignore != last_ignore {
                 let _ = bubble.set_ignore_cursor_events(ignore);
@@ -173,6 +211,18 @@ fn set_window_level(window: &WebviewWindow<Wry>, level: isize) {
     if let Ok(ns_window) = window.ns_window() {
         unsafe {
             let _: () = msg_send![ns_window as *mut NSObject, setLevel: level];
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn configure_bubble_mouse_behavior(window: &WebviewWindow<Wry>) {
+    use objc2::msg_send;
+    use objc2_foundation::NSObject;
+
+    if let Ok(ns_window) = window.ns_window() {
+        unsafe {
+            let _: () = msg_send![ns_window as *mut NSObject, setAcceptsMouseMovedEvents: true];
         }
     }
 }

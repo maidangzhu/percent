@@ -1,16 +1,17 @@
 import { Hono } from "hono";
 import { prisma } from "../db/client.js";
+import { newSnowflakeId } from "../lib/snowflake.js";
 import { buildTaskFingerprint } from "../lib/taskDetector.js";
 
 export const tasksRouter = new Hono();
 
 function serializeTask(task: any) {
   return {
-    id: task.id.toString(),
-    person_id: task.personId?.toString() ?? null,
+    id: task.id,
+    person_id: task.personId ?? null,
     person_name: task.person?.name ?? null,
-    log_id: task.logId?.toString() ?? null,
-    source_turn_id: task.sourceTurnId?.toString() ?? null,
+    log_id: task.logId ?? null,
+    source_turn_id: task.sourceTurnId ?? null,
     title: task.title,
     description: task.description,
     due_at: task.dueAt,
@@ -46,6 +47,7 @@ tasksRouter.post("/", async (c) => {
 
   const task = await prisma.task.create({
     data: {
+      id: newSnowflakeId(),
       title: body.title.trim(),
       description: body.description?.trim() ?? "",
       dueAt: body.due_at ? new Date(body.due_at) : null,
@@ -86,9 +88,10 @@ tasksRouter.post("/confirm", async (c) => {
 
   const task = await prisma.task.create({
     data: {
-      personId: body.person_id ? BigInt(body.person_id) : null,
-      logId: body.log_id ? BigInt(body.log_id) : null,
-      sourceTurnId: body.source_turn_id ? BigInt(body.source_turn_id) : null,
+      id: newSnowflakeId(),
+      personId: body.person_id ?? null,
+      logId: body.log_id ?? null,
+      sourceTurnId: body.source_turn_id ?? null,
       title: body.title.trim(),
       description: body.description?.trim() ?? "",
       dueAt: body.due_at ? new Date(body.due_at) : null,
@@ -103,7 +106,7 @@ tasksRouter.post("/confirm", async (c) => {
 });
 
 tasksRouter.patch("/:id", async (c) => {
-  const id = BigInt(c.req.param("id"));
+  const id = c.req.param("id");
   const body = await c.req.json<{
     title?: string;
     description?: string;
@@ -137,7 +140,7 @@ tasksRouter.patch("/:id", async (c) => {
 });
 
 tasksRouter.delete("/:id", async (c) => {
-  const id = BigInt(c.req.param("id"));
+  const id = c.req.param("id");
   await prisma.task.delete({ where: { id } });
   return c.json({ data: { ok: true } });
 });

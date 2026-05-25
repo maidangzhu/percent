@@ -3,18 +3,18 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 model Log {
-  id             BigInt     @id @default(autoincrement())
-  occurredAt     DateTime   @map("occurred_at") @db.Timestamptz
+  id             String     @id
+  occurredAt     DateTime   @map("occurred_at")
   appName        String     @map("app_name")
   appBundleId    String     @default("") @map("app_bundle_id")
   isSend         Boolean    @default(false) @map("is_send")
   isWechat       Boolean    @default(false) @map("is_wechat")
   screenshotPath String?    @map("screenshot_path")
-  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  createdAt      DateTime   @default(now()) @map("created_at")
   chatTurns      ChatTurn[]
   tasks          Task[]
 
@@ -24,11 +24,11 @@ model Log {
 }
 
 model Person {
-  id        BigInt     @id @default(autoincrement())
+  id        String     @id
   name      String
   clientApp String     @default("WeChat") @map("client_app")
-  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at")
   chatTurns ChatTurn[]
   tasks     Task[]
 
@@ -37,13 +37,13 @@ model Person {
 }
 
 model ChatTurn {
-  id            BigInt        @id @default(autoincrement())
-  logId         BigInt        @map("log_id")
-  personId      BigInt        @map("person_id")
+  id            String        @id
+  logId         String        @map("log_id")
+  personId      String        @map("person_id")
   topic         String        @default("")
-  capturedAt    DateTime      @map("captured_at") @db.Timestamptz
+  capturedAt    DateTime      @map("captured_at")
   rawAiResponse Json?         @map("raw_ai_response")
-  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  createdAt     DateTime      @default(now()) @map("created_at")
   log           Log           @relation(fields: [logId], references: [id], onDelete: Cascade)
   person        Person        @relation(fields: [personId], references: [id])
   messages      ChatMessage[]
@@ -55,12 +55,12 @@ model ChatTurn {
 }
 
 model ChatMessage {
-  id        BigInt   @id @default(autoincrement())
-  turnId    BigInt   @map("turn_id")
+  id        String   @id
+  turnId    String   @map("turn_id")
   role      String
   content   String
   seq       Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at")
   turn      ChatTurn @relation(fields: [turnId], references: [id], onDelete: Cascade)
 
   @@index([turnId, seq], map: "idx_chat_messages_turn_id")
@@ -68,20 +68,20 @@ model ChatMessage {
 }
 
 model Task {
-  id            BigInt    @id @default(autoincrement())
-  personId      BigInt?   @map("person_id")
-  logId         BigInt?   @map("log_id")
-  sourceTurnId  BigInt?   @map("source_turn_id")
+  id            String    @id
+  personId      String?   @map("person_id")
+  logId         String?   @map("log_id")
+  sourceTurnId  String?   @map("source_turn_id")
   title         String
   description   String    @default("")
-  dueAt         DateTime? @map("due_at") @db.Timestamptz
+  dueAt         DateTime? @map("due_at")
   status        String    @default("pending")
   fingerprint   String    @unique
   evidence      String    @default("")
   rawAiResponse Json?     @map("raw_ai_response")
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
-  completedAt   DateTime? @map("completed_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+  completedAt   DateTime? @map("completed_at")
   person        Person?   @relation(fields: [personId], references: [id])
   log           Log?      @relation(fields: [logId], references: [id], onDelete: SetNull)
   sourceTurn    ChatTurn? @relation(fields: [sourceTurnId], references: [id], onDelete: SetNull)

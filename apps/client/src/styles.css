@@ -851,6 +851,7 @@ body {
 }
 
 .person-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -861,7 +862,18 @@ body {
   text-align: left;
   width: 100%;
   border-bottom: 1px solid #f4f4f5;
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.person-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
 }
 
 .person-item:hover {
@@ -869,7 +881,11 @@ body {
 }
 
 .person-item.active {
-  background: #f4f4f5;
+  background: #09090b;
+}
+
+.person-item.active::before {
+  background: #fff;
 }
 
 .person-avatar {
@@ -884,6 +900,12 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.person-item.active .person-avatar {
+  background: #fff;
+  color: #09090b;
 }
 
 .person-info {
@@ -903,6 +925,11 @@ body {
   font-size: 11px;
   color: #71717a;
   margin-top: 2px;
+}
+
+.person-item.active .person-name,
+.person-item.active .person-meta {
+  color: #fff;
 }
 
 .context-menu-content {
@@ -978,49 +1005,12 @@ body {
   margin: 0;
 }
 
-/* Turns timeline */
-.turns-timeline {
-  padding: 16px 28px 24px;
+/* Chat stream */
+.chat-stream {
+  padding: 18px 28px 28px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-}
-
-.turn-card {
-  background: #fff;
-  border: 1px solid #e4e4e7;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.turn-meta {
-  padding: 10px 14px 8px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid #f4f4f5;
-}
-
-.turn-time {
-  font-size: 11px;
-  font-family: "SF Mono", "Menlo", monospace;
-  color: #71717a;
-}
-
-.turn-topic {
-  font-size: 12px;
-  font-weight: 600;
-  color: #09090b;
-  background: #f4f4f5;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.turn-messages {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  gap: 9px;
 }
 
 /* ---- 回复建议区 ---- */

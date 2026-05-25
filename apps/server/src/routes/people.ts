@@ -19,7 +19,7 @@ peopleRouter.get("/", async (c) => {
   });
 
   const data = people.map((p) => ({
-    id: p.id.toString(),
+    id: p.id,
     name: p.name,
     client_app: p.clientApp,
     created_at: p.createdAt,
@@ -33,7 +33,7 @@ peopleRouter.get("/", async (c) => {
 
 // GET /people/:id — 某人的详细聊天记录
 peopleRouter.get("/:id", async (c) => {
-  const personId = BigInt(c.req.param("id"));
+  const personId = c.req.param("id");
 
   const person = await prisma.person.findUnique({
     where: { id: personId },
@@ -51,22 +51,35 @@ peopleRouter.get("/:id", async (c) => {
 
   const mergedTurns = mergeOverlappingChatTurns(
     person.chatTurns.map((t) => ({
-      id: t.id.toString(),
-      log_id: t.logId.toString(),
+      id: t.id,
+      log_id: t.logId,
       topic: t.topic,
       captured_at: t.capturedAt,
       capturedAt: t.capturedAt,
       messages: t.messages.map((m) => ({ role: m.role, content: m.content })),
     }))
   ).reverse();
+  const mergedMessages = mergedTurns
+    .slice()
+    .reverse()
+    .flatMap((turn) =>
+      turn.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        turn_id: turn.id,
+        topic: turn.topic,
+        captured_at: turn.captured_at,
+      }))
+    );
 
   return c.json({
     data: {
-      id: person.id.toString(),
+      id: person.id,
       name: person.name,
       client_app: person.clientApp,
       created_at: person.createdAt,
       updated_at: person.updatedAt,
+      messages: mergedMessages,
       turns: mergedTurns.map(({ capturedAt, ...turn }) => turn),
     },
   });
@@ -74,7 +87,7 @@ peopleRouter.get("/:id", async (c) => {
 
 // DELETE /people/:id — 删除联系人及其聊天记录
 peopleRouter.delete("/:id", async (c) => {
-  const personId = BigInt(c.req.param("id"));
+  const personId = c.req.param("id");
 
   const person = await prisma.person.findUnique({
     where: { id: personId },
@@ -94,7 +107,7 @@ peopleRouter.delete("/:id", async (c) => {
       where: {
         OR: [
           { personId },
-          turnIds.length ? { sourceTurnId: { in: turnIds } } : { id: -1n },
+          ...(turnIds.length ? [{ sourceTurnId: { in: turnIds } }] : []),
         ],
       },
     });

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use chrono::Local;
 
-/// 截取当前屏幕，保存到 ~/Library/Application Support/percent-tracker/screenshots/
+/// 截取当前屏幕，保存到 ~/.percent-tracker/screenshots/
 /// 文件名格式: screenshot_2026-05-22_15-30-00-123.png
 /// 返回保存路径，失败返回 None
 pub fn capture_screen(log_dir: &PathBuf) -> Option<PathBuf> {
