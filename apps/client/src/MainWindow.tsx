@@ -85,9 +85,18 @@ interface ShortcutConfig {
   modifiers: string[];
 }
 
-type MenuKey = "logs" | "people" | "tasks" | "settings";
+interface PermissionStatus {
+  id: string;
+  name: string;
+  description: string;
+  granted: boolean;
+  required: boolean;
+}
+
+type MenuKey = "permissions" | "logs" | "people" | "tasks" | "settings";
 
 const MENU_ITEMS: { key: MenuKey; label: string; icon: string }[] = [
+  { key: "permissions", label: "Permissions", icon: "◐" },
   { key: "logs",   label: "Logs",   icon: "⌘" },
   { key: "people", label: "People", icon: "◎" },
   { key: "tasks",  label: "Task",   icon: "✓" },
@@ -103,6 +112,7 @@ export default function MainWindow() {
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [screenshotEnabled, setScreenshotEnabled] = useState(false);
   const [shortcutConfig, setShortcutConfig] = useState<ShortcutConfig>({ key: "Enter", modifiers: [] });
+  const [permissions, setPermissions] = useState<PermissionStatus[]>([]);
 
   const loadLogs = async () => {
     try {
@@ -134,10 +144,23 @@ export default function MainWindow() {
     }
   };
 
+  const loadPermissions = async (redirectIfMissing = false) => {
+    try {
+      const next = await invoke<PermissionStatus[]>("get_required_permissions");
+      setPermissions(next);
+      if (redirectIfMissing && next.some((permission) => permission.required && !permission.granted)) {
+        setActiveKey("permissions");
+      }
+    } catch (e) {
+      console.error("[main] get permissions error:", e);
+    }
+  };
+
   useEffect(() => {
     loadLogs();
     loadPeople();
     loadTasks();
+    loadPermissions(true);
     invoke<boolean>("get_screenshot_enabled").then(setScreenshotEnabled);
     invoke<ShortcutConfig>("get_shortcut_config").then(setShortcutConfig);
 
@@ -196,6 +219,13 @@ export default function MainWindow() {
             onToggleScreenshot={toggleScreenshot}
           />
         )}
+        {activeKey === "permissions" && (
+          <PermissionsView
+            permissions={permissions}
+            onRefresh={() => loadPermissions(true)}
+            onContinue={() => setActiveKey("logs")}
+          />
+        )}
         {activeKey === "people" && (
           <PeopleView people={people} onRefresh={() => { loadPeople(); loadTasks(); }} />
         )}
@@ -208,6 +238,8 @@ export default function MainWindow() {
             onToggleScreenshot={toggleScreenshot}
             shortcutConfig={shortcutConfig}
             onShortcutSaved={setShortcutConfig}
+            permissions={permissions}
+            onRefreshPermissions={() => loadPermissions(false)}
             onCacheCleared={() => {
               loadLogs();
               loadPeople();
@@ -235,12 +267,16 @@ function SettingsView({
   onToggleScreenshot,
   shortcutConfig,
   onShortcutSaved,
+  permissions,
+  onRefreshPermissions,
   onCacheCleared,
 }: {
   screenshotEnabled: boolean;
   onToggleScreenshot: () => void;
   shortcutConfig: ShortcutConfig;
   onShortcutSaved: (shortcut: ShortcutConfig) => void;
+  permissions: PermissionStatus[];
+  onRefreshPermissions: () => void;
   onCacheCleared: () => void;
 }) {
   const [draftShortcut, setDraftShortcut] = useState<ShortcutConfig>(shortcutConfig);
@@ -289,6 +325,16 @@ function SettingsView({
           <p className="subtitle">本地缓存、截图和快捷键</p>
         </div>
       </header>
+
+      <section className="settings-section">
+        <div className="settings-section-main">
+          <h2>权限</h2>
+          <p>应用需要屏幕录制和辅助功能权限才能完成截图、识别聊天窗口和分析流程。</p>
+        </div>
+        <div className="settings-section-action permissions-inline">
+          <PermissionList permissions={permissions} onRefresh={onRefreshPermissions} compact />
+        </div>
+      </section>
 
       <section className="settings-section">
         <div className="settings-section-main">
@@ -355,6 +401,100 @@ function SettingsView({
           {shortcutMessage && <span className="settings-message">{shortcutMessage}</span>}
         </div>
       </section>
+    </div>
+  );
+}
+
+function PermissionsView({
+  permissions,
+  onRefresh,
+  onContinue,
+}: {
+  permissions: PermissionStatus[];
+  onRefresh: () => void;
+  onContinue: () => void;
+}) {
+  const allGranted = permissions.every((permission) => !permission.required || permission.granted);
+
+  return (
+    <div className="permissions-view">
+      <header className="content-header">
+        <div>
+          <h1>Permissions</h1>
+          <p className="subtitle">开启必要权限后才能使用截图分析、People 和 Task 功能</p>
+        </div>
+        <button className="refresh-btn" onClick={onRefresh}>Refresh</button>
+      </header>
+
+      <div className="permissions-body">
+        <PermissionList permissions={permissions} onRefresh={onRefresh} />
+        <div className="permissions-footer">
+          <button className="refresh-btn" onClick={onContinue} disabled={!allGranted}>
+            {allGranted ? "Continue" : "等待权限开启"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PermissionList({
+  permissions,
+  onRefresh,
+  compact = false,
+}: {
+  permissions: PermissionStatus[];
+  onRefresh: () => void;
+  compact?: boolean;
+}) {
+  if (!permissions.length) {
+    return <div className="permission-empty">当前系统无需额外授权。</div>;
+  }
+
+  const requestPermission = async (permission: PermissionStatus) => {
+    try {
+      await invoke<boolean>("request_permission", { permissionId: permission.id });
+      window.setTimeout(onRefresh, 600);
+    } catch (e) {
+      console.error("[permissions] request failed:", e);
+    }
+  };
+
+  const openSettings = async (permission: PermissionStatus) => {
+    try {
+      await invoke("open_permission_settings", { permissionId: permission.id });
+      window.setTimeout(onRefresh, 600);
+    } catch (e) {
+      console.error("[permissions] open settings failed:", e);
+    }
+  };
+
+  return (
+    <div className={`permission-list ${compact ? "compact" : ""}`}>
+      {permissions.map((permission) => (
+        <div key={permission.id} className="permission-item">
+          <div className={`permission-status-dot ${permission.granted ? "granted" : ""}`} />
+          <div className="permission-copy">
+            <div className="permission-title-row">
+              <h3>{permission.name}</h3>
+              <span className={`permission-badge ${permission.granted ? "granted" : ""}`}>
+                {permission.granted ? "已开启" : "未开启"}
+              </span>
+            </div>
+            <p>{permission.description}</p>
+          </div>
+          <div className="permission-actions">
+            {!permission.granted && (
+              <button className="refresh-btn" onClick={() => requestPermission(permission)}>
+                Request
+              </button>
+            )}
+            <button className="refresh-btn" onClick={() => openSettings(permission)}>
+              Open
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

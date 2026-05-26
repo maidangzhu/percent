@@ -10,9 +10,11 @@ mod logger;
 mod frontapp;
 mod window;
 mod screenshotter;
+mod permissions;
 
 use keyboard::{start_keyboard_listener, ShortcutConfig};
 use logger::LogStore;
+use permissions::{get_required_permissions, open_permission_settings, request_permission};
 use screenshotter::capture_screen_without_bubble;
 use window::{move_bubble_by_drag, set_bubble_hit_regions, setup_windows, BubbleHitRegions};
 
@@ -297,6 +299,9 @@ pub fn run() {
             set_mock_task_preview,
             move_bubble_by_drag,
             set_bubble_hit_regions,
+            get_required_permissions,
+            open_permission_settings,
+            request_permission,
             read_file_base64,
         ])
         .setup(|app| {

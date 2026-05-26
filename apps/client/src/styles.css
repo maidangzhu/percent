@@ -1629,3 +1629,130 @@ body {
   font-size: 12px;
   color: #71717a;
 }
+
+/* ===== Permissions view ===== */
+.permissions-view {
+  height: 100%;
+  overflow-y: auto;
+  background: #f8f8f7;
+}
+
+.permissions-body {
+  padding: 28px;
+}
+
+.permission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.permission-list.compact {
+  width: min(520px, 100%);
+}
+
+.permission-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e4e4e7;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.permission-list.compact .permission-item {
+  grid-template-columns: 10px minmax(0, 1fr);
+}
+
+.permission-list.compact .permission-actions {
+  grid-column: 2;
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+
+.permission-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ff3b30;
+}
+
+.permission-status-dot.granted {
+  background: #22c55e;
+}
+
+.permission-copy {
+  min-width: 0;
+}
+
+.permission-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.permission-title-row h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+  color: #09090b;
+}
+
+.permission-copy p {
+  margin-top: 4px;
+  color: #71717a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.permission-badge {
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 59, 48, 0.1);
+  color: #ff3b30;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.permission-badge.granted {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.permission-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.permission-empty {
+  padding: 16px;
+  border: 1px solid #e4e4e7;
+  border-radius: 12px;
+  background: #fff;
+  color: #71717a;
+  font-size: 13px;
+}
+
+.permissions-footer {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.permissions-footer .refresh-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.permissions-inline {
+  align-items: flex-start;
+}
