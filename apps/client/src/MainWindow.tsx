@@ -514,11 +514,26 @@ function SettingsView({
 
   const clearCache = async () => {
     setCacheMessage("");
-    const ok = window.confirm("清空本地截图和本地日志缓存？数据库里的聊天、People、Task 不会被删除。");
+    const ok = window.confirm("确认清空本地截图缓存、日志文件和 Logs 页面记录？People、聊天记录和 Task 不会被删除。");
     if (!ok) return;
     try {
-      const removed = await invoke<number>("clear_local_cache");
-      setCacheMessage(removed > 0 ? `已清理 ${removed} 个本地缓存文件。` : "没有可清理的本地缓存。");
+      const [removed, logsResp] = await Promise.all([
+        invoke<number>("clear_local_cache"),
+        fetch(`${API_BASE}/logs`, {
+          method: "DELETE",
+          credentials: "include",
+        }),
+      ]);
+      const logsJson = await logsResp.json() as ApiResponse<{ deleted: number }>;
+      if (!logsResp.ok || logsJson.code !== 0) {
+        throw new Error(logsJson.message || "清空 Logs 失败");
+      }
+      const deletedLogs = logsJson.data?.deleted ?? 0;
+      setCacheMessage(
+        removed > 0 || deletedLogs > 0
+          ? `已清理 ${removed} 个本地缓存文件，清空 ${deletedLogs} 条 Logs 记录。`
+          : "没有可清理的本地缓存和 Logs 记录。"
+      );
       onCacheCleared();
     } catch (e) {
       console.error("[settings] clear cache failed:", e);
@@ -573,7 +588,7 @@ function SettingsView({
       <section className="settings-section">
         <div className="settings-section-main">
           <h2>清空缓存</h2>
-          <p>清理本机截图文件和本地 enter / AI 日志文件，不会删除服务端数据库里的聊天、People 或 Task。</p>
+          <p>清理本机截图文件、本地 enter / AI 日志文件和 Logs 页面记录，不会删除 People、聊天记录或 Task。</p>
         </div>
         <div className="settings-section-action">
           <button className="danger-btn" onClick={clearCache}>清空缓存</button>

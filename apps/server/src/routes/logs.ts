@@ -4,6 +4,8 @@ import { elapsedMs, logError, logInfo } from "../lib/appLogger.js";
 import { newSnowflakeId } from "../lib/snowflake.js";
 
 export const logsRouter = new Hono();
+const CACHE_CLEAR_PLACEHOLDER_LOG_ID = "system-cache-clear-placeholder";
+const CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID = "percent.internal.cache";
 
 // GET /logs — 分页获取日志列表
 logsRouter.get("/", async (c) => {
@@ -14,6 +16,9 @@ logsRouter.get("/", async (c) => {
     prisma.log.findMany({
       take: limit,
       skip: offset,
+      where: {
+        appBundleId: { not: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID },
+      },
       orderBy: { occurredAt: "desc" },
       include: {
         chatTurns: {
@@ -23,7 +28,11 @@ logsRouter.get("/", async (c) => {
         },
       },
     }),
-    prisma.log.count(),
+    prisma.log.count({
+      where: {
+        appBundleId: { not: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID },
+      },
+    }),
   ]);
 
   const data = rows.map((log) => {
@@ -44,6 +53,80 @@ logsRouter.get("/", async (c) => {
   });
 
   return c.json({ data, total, limit, offset });
+});
+
+// DELETE /logs — 清空本地 raw logs，同时保留 People / Chat / Task 数据
+logsRouter.delete("/", async (c) => {
+  const startedAt = Date.now();
+
+  logInfo("logs.clear.start", {});
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const [logCount, linkedTurnCount] = await Promise.all([
+        tx.log.count({
+          where: {
+            appBundleId: { not: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID },
+          },
+        }),
+        tx.chatTurn.count({
+          where: {
+            logId: { not: CACHE_CLEAR_PLACEHOLDER_LOG_ID },
+          },
+        }),
+      ]);
+
+      if (linkedTurnCount > 0) {
+        await tx.log.upsert({
+          where: { id: CACHE_CLEAR_PLACEHOLDER_LOG_ID },
+          create: {
+            id: CACHE_CLEAR_PLACEHOLDER_LOG_ID,
+            occurredAt: new Date(0),
+            appName: "Percent",
+            appBundleId: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID,
+            isSend: false,
+            isWechat: false,
+            screenshotPath: null,
+          },
+          update: {},
+        });
+
+        await tx.chatTurn.updateMany({
+          where: {
+            logId: { not: CACHE_CLEAR_PLACEHOLDER_LOG_ID },
+          },
+          data: {
+            logId: CACHE_CLEAR_PLACEHOLDER_LOG_ID,
+          },
+        });
+      }
+
+      const deleted = await tx.log.deleteMany({
+        where: {
+          appBundleId: { not: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID },
+        },
+      });
+
+      return {
+        requested: logCount,
+        deleted: deleted.count,
+        preserved_chat_turns: linkedTurnCount,
+      };
+    });
+
+    logInfo("logs.clear.success", {
+      ...result,
+      duration_ms: elapsedMs(startedAt),
+    });
+
+    return c.json({ data: result });
+  } catch (error) {
+    logError("logs.clear.error", {
+      error,
+      duration_ms: elapsedMs(startedAt),
+    });
+    throw error;
+  }
 });
 
 // POST /logs — 客户端上报一次 Enter 事件
