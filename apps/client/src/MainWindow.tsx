@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 
 // ---- 配置 ----
 
@@ -505,6 +506,8 @@ function SettingsView({
 }) {
   const [draftShortcut, setDraftShortcut] = useState<ShortcutConfig>(shortcutConfig);
   const [savingShortcut, setSavingShortcut] = useState(false);
+  const [clearCacheOpen, setClearCacheOpen] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
   const [cacheMessage, setCacheMessage] = useState("");
   const [shortcutMessage, setShortcutMessage] = useState("");
 
@@ -514,8 +517,7 @@ function SettingsView({
 
   const clearCache = async () => {
     setCacheMessage("");
-    const ok = window.confirm("确认清空本地截图缓存、日志文件和 Logs 页面记录？People、聊天记录和 Task 不会被删除。");
-    if (!ok) return;
+    setClearingCache(true);
     try {
       const [removed, logsResp] = await Promise.all([
         invoke<number>("clear_local_cache"),
@@ -535,9 +537,12 @@ function SettingsView({
           : "没有可清理的本地缓存和 Logs 记录。"
       );
       onCacheCleared();
+      setClearCacheOpen(false);
     } catch (e) {
       console.error("[settings] clear cache failed:", e);
       setCacheMessage("清理失败，请看控制台日志。");
+    } finally {
+      setClearingCache(false);
     }
   };
 
@@ -591,7 +596,32 @@ function SettingsView({
           <p>清理本机截图文件、本地 enter / AI 日志文件和 Logs 页面记录，不会删除 People、聊天记录或 Task。</p>
         </div>
         <div className="settings-section-action">
-          <button className="danger-btn" onClick={clearCache}>清空缓存</button>
+          <AlertDialog.Root open={clearCacheOpen} onOpenChange={setClearCacheOpen}>
+            <AlertDialog.Trigger asChild>
+              <button className="danger-btn">清空缓存</button>
+            </AlertDialog.Trigger>
+            <AlertDialog.Portal>
+              <AlertDialog.Overlay className="alert-dialog-overlay" />
+              <AlertDialog.Content className="alert-dialog-content">
+                <div className="alert-dialog-header">
+                  <AlertDialog.Title className="alert-dialog-title">确认清空缓存？</AlertDialog.Title>
+                  <AlertDialog.Description className="alert-dialog-description">
+                    将清理本机截图缓存、本地 enter / AI 日志文件和 Logs 页面记录。People、聊天记录和 Task 不会被删除。
+                  </AlertDialog.Description>
+                </div>
+                <div className="alert-dialog-actions">
+                  <AlertDialog.Cancel asChild>
+                    <button className="alert-dialog-cancel" disabled={clearingCache}>取消</button>
+                  </AlertDialog.Cancel>
+                  <AlertDialog.Action asChild>
+                    <button className="alert-dialog-danger" onClick={clearCache} disabled={clearingCache}>
+                      {clearingCache ? "清理中" : "确认清空"}
+                    </button>
+                  </AlertDialog.Action>
+                </div>
+              </AlertDialog.Content>
+            </AlertDialog.Portal>
+          </AlertDialog.Root>
           {cacheMessage && <span className="settings-message">{cacheMessage}</span>}
         </div>
       </section>
