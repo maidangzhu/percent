@@ -10,14 +10,35 @@ import { analyzeRouter } from "./routes/analyze.js";
 import { chatRouter } from "./routes/chat.js";
 import { suggestRouter } from "./routes/suggest.js";
 import { tasksRouter } from "./routes/tasks.js";
+import { auth } from "./auth/index.js";
 import { logInfo } from "./lib/appLogger.js";
 import { gatewayErrorHandler, responseGateway } from "./middleware/responseGateway.js";
 import { initializeLocalDatabase } from "./db/init.js";
 
 const app = new Hono();
+const allowedOrigins = new Set([
+  "http://localhost:1420",
+  "http://127.0.0.1:1420",
+  "tauri://localhost",
+  "http://tauri.localhost",
+]);
 
 app.use("*", logger());
-app.use("*", cors({ origin: "*" }));
+app.use(
+  "*",
+  cors({
+    origin: (origin) => {
+      if (!origin) return null;
+      if (allowedOrigins.has(origin)) return origin;
+      if (/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return origin;
+      return null;
+    },
+    allowHeaders: ["Content-Type", "Authorization"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    credentials: true,
+  })
+);
+app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
 app.use("*", responseGateway());
 app.onError(gatewayErrorHandler);
 

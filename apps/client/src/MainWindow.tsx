@@ -6,6 +6,7 @@ import * as ContextMenu from "@radix-ui/react-context-menu";
 // ---- 配置 ----
 
 const API_BASE = "http://localhost:3000";
+const AUTH_BASE = `${API_BASE}/api/auth`;
 
 interface ApiResponse<T> {
   code: number;
@@ -93,6 +94,13 @@ interface PermissionStatus {
   required: boolean;
 }
 
+interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  image?: string | null;
+}
+
 type MenuKey = "permissions" | "logs" | "people" | "tasks" | "settings";
 
 const MENU_ITEMS: { key: MenuKey; label: string; icon: string }[] = [
@@ -107,6 +115,9 @@ const MENU_ITEMS: { key: MenuKey; label: string; icon: string }[] = [
 
 export default function MainWindow() {
   const [activeKey, setActiveKey] = useState<MenuKey>("logs");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [logs, setLogs] = useState<LogRow[]>([]);
   const [people, setPeople] = useState<PersonSummary[]>([]);
   const [tasks, setTasks] = useState<TaskRow[]>([]);
@@ -116,7 +127,7 @@ export default function MainWindow() {
 
   const loadLogs = async () => {
     try {
-      const resp = await fetch(`${API_BASE}/logs?limit=100&offset=0`);
+      const resp = await fetch(`${API_BASE}/logs?limit=100&offset=0`, { credentials: "include" });
       const json = await resp.json() as ApiResponse<LogRow[]>;
       setLogs(json.data ?? []);
     } catch (e) {
@@ -126,7 +137,7 @@ export default function MainWindow() {
 
   const loadPeople = async () => {
     try {
-      const resp = await fetch(`${API_BASE}/people`);
+      const resp = await fetch(`${API_BASE}/people`, { credentials: "include" });
       const json = await resp.json() as ApiResponse<PersonSummary[]>;
       setPeople(json.data ?? []);
     } catch (e) {
@@ -136,7 +147,7 @@ export default function MainWindow() {
 
   const loadTasks = async () => {
     try {
-      const resp = await fetch(`${API_BASE}/tasks`);
+      const resp = await fetch(`${API_BASE}/tasks`, { credentials: "include" });
       const json = await resp.json() as ApiResponse<TaskRow[]>;
       setTasks(json.data ?? []);
     } catch (e) {
@@ -157,6 +168,38 @@ export default function MainWindow() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+
+    fetch(`${AUTH_BASE}/get-session`, { credentials: "include" })
+      .then(async (resp) => {
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => null);
+          throw new Error(body?.message ?? "登录状态检查失败");
+        }
+        return resp.json() as Promise<{ user?: AuthUser } | null>;
+      })
+      .then((session) => {
+        if (!cancelled) setAuthUser(session?.user ?? null);
+      })
+      .catch((e) => {
+        console.error("[auth] session check failed:", e);
+        if (!cancelled) {
+          setAuthError(e instanceof Error ? e.message : "登录状态检查失败");
+          setAuthUser(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
+
     loadLogs();
     loadPeople();
     loadTasks();
@@ -181,13 +224,53 @@ export default function MainWindow() {
       unlistenAI.then((f) => f());
       unlistenTasks.then((f) => f());
     };
-  }, []);
+  }, [authUser?.id]);
 
   const toggleScreenshot = async () => {
     const next = !screenshotEnabled;
     await invoke("set_screenshot_enabled", { enabled: next });
     setScreenshotEnabled(next);
   };
+
+  const handleSignOut = async () => {
+    try {
+      await fetch(`${AUTH_BASE}/sign-out`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (e) {
+      console.error("[auth] sign out failed:", e);
+    } finally {
+      setAuthUser(null);
+      setLogs([]);
+      setPeople([]);
+      setTasks([]);
+      setActiveKey("logs");
+    }
+  };
+
+  if (authLoading) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card compact">
+          <span className="app-icon">%</span>
+          <p>正在检查登录状态…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <AuthView
+        initialError={authError}
+        onAuthenticated={(user) => {
+          setAuthUser(user);
+          setAuthError("");
+        }}
+      />
+    );
+  }
 
   return (
     <div className="main-layout">
@@ -208,6 +291,14 @@ export default function MainWindow() {
             </button>
           ))}
         </nav>
+        <div className="sidebar-account">
+          <div className="account-avatar">{authUser.name.charAt(0).toUpperCase()}</div>
+          <div className="account-copy">
+            <div className="account-name">{authUser.name}</div>
+            <div className="account-email">{authUser.email}</div>
+          </div>
+          <button className="account-logout" onClick={handleSignOut} title="退出登录">↩</button>
+        </div>
       </aside>
 
       <main className="content">
@@ -240,6 +331,8 @@ export default function MainWindow() {
             onShortcutSaved={setShortcutConfig}
             permissions={permissions}
             onRefreshPermissions={() => loadPermissions(false)}
+            authUser={authUser}
+            onSignOut={handleSignOut}
             onCacheCleared={() => {
               loadLogs();
               loadPeople();
@@ -248,6 +341,133 @@ export default function MainWindow() {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+function AuthView({
+  initialError,
+  onAuthenticated,
+}: {
+  initialError: string;
+  onAuthenticated: (user: AuthUser) => void;
+}) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(initialError);
+
+  useEffect(() => {
+    setMessage(initialError);
+  }, [initialError]);
+
+  const submit = async () => {
+    const trimmedEmail = email.trim();
+    const trimmedName = name.trim();
+
+    if (!trimmedEmail || !password || (mode === "register" && !trimmedName)) {
+      setMessage("请填写完整信息。");
+      return;
+    }
+
+    if (password.length < 8) {
+      setMessage("密码至少 8 位。");
+      return;
+    }
+
+    setBusy(true);
+    setMessage("");
+
+    try {
+      const resp = await fetch(`${AUTH_BASE}/${mode === "login" ? "sign-in/email" : "sign-up/email"}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          mode === "login"
+            ? { email: trimmedEmail, password, rememberMe: true }
+            : { name: trimmedName, email: trimmedEmail, password, rememberMe: true }
+        ),
+      });
+      const body = await resp.json().catch(() => null);
+
+      if (!resp.ok) {
+        throw new Error(body?.message ?? "请求失败，请稍后再试。");
+      }
+
+      const user = body?.user as AuthUser | undefined;
+      if (user) {
+        onAuthenticated(user);
+        return;
+      }
+
+      const sessionResp = await fetch(`${AUTH_BASE}/get-session`, { credentials: "include" });
+      const session = await sessionResp.json().catch(() => null) as { user?: AuthUser } | null;
+      if (!session?.user) throw new Error("登录成功，但没有拿到用户会话。");
+      onAuthenticated(session.user);
+    } catch (e) {
+      console.error("[auth] submit failed:", e);
+      setMessage(e instanceof Error ? e.message : "请求失败，请稍后再试。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <span className="app-icon">%</span>
+          <div>
+            <h1>Percent Tracker</h1>
+            <p>登录后继续使用本地截图分析和待办记录。</p>
+          </div>
+        </div>
+
+        <div className="auth-tabs" role="tablist" aria-label="登录或注册">
+          <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>
+            登录
+          </button>
+          <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setMessage(""); }}>
+            注册
+          </button>
+        </div>
+
+        <div className="auth-form">
+          {mode === "register" && (
+            <label>
+              <span>名称</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="你的名称" />
+            </label>
+          )}
+          <label>
+            <span>邮箱</span>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" type="email" />
+          </label>
+          <label>
+            <span>密码</span>
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+              placeholder="至少 8 位"
+              type="password"
+            />
+          </label>
+        </div>
+
+        {message && <div className="auth-message">{message}</div>}
+
+        <button className="auth-submit" onClick={submit} disabled={busy}>
+          {busy ? "处理中…" : mode === "login" ? "登录" : "创建账号"}
+        </button>
+
+        <p className="auth-note">账号和会话保存到 Neon；People、聊天、Task 和截图日志仍只保存在本机。</p>
+      </div>
     </div>
   );
 }
@@ -269,6 +489,8 @@ function SettingsView({
   onShortcutSaved,
   permissions,
   onRefreshPermissions,
+  authUser,
+  onSignOut,
   onCacheCleared,
 }: {
   screenshotEnabled: boolean;
@@ -277,6 +499,8 @@ function SettingsView({
   onShortcutSaved: (shortcut: ShortcutConfig) => void;
   permissions: PermissionStatus[];
   onRefreshPermissions: () => void;
+  authUser: AuthUser;
+  onSignOut: () => void;
   onCacheCleared: () => void;
 }) {
   const [draftShortcut, setDraftShortcut] = useState<ShortcutConfig>(shortcutConfig);
@@ -327,6 +551,16 @@ function SettingsView({
       </header>
 
       <section className="settings-section">
+        <div className="settings-section-main">
+          <h2>账号</h2>
+          <p>{authUser.email}</p>
+        </div>
+        <div className="settings-section-action">
+          <button className="refresh-btn" onClick={onSignOut}>退出登录</button>
+        </div>
+      </section>
+
+      <section className="settings-section settings-permissions-section">
         <div className="settings-section-main">
           <h2>权限</h2>
           <p>应用需要屏幕录制和辅助功能权限才能完成截图、识别聊天窗口和分析流程。</p>
@@ -511,6 +745,7 @@ function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => vo
     if (!newTitle.trim()) return;
     await fetch(`${API_BASE}/tasks`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: newTitle.trim() }),
     });
@@ -521,6 +756,7 @@ function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => vo
   const updateTask = async (id: string, body: Partial<TaskRow>) => {
     await fetch(`${API_BASE}/tasks/${id}`, {
       method: "PATCH",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -528,7 +764,7 @@ function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => vo
   };
 
   const deleteTask = async (id: string) => {
-    await fetch(`${API_BASE}/tasks/${id}`, { method: "DELETE" });
+    await fetch(`${API_BASE}/tasks/${id}`, { method: "DELETE", credentials: "include" });
     onRefresh();
   };
 
@@ -658,7 +894,7 @@ function LogsView({
     if (detailCache[log.id]) return; // 已缓存
 
     try {
-      const resp = await fetch(`${API_BASE}/people/${log.person_id}`);
+      const resp = await fetch(`${API_BASE}/people/${log.person_id}`, { credentials: "include" });
       const json = await resp.json() as ApiResponse<PersonDetail>;
       const person = json.data;
       const turn = person.turns.find((t) => t.id === log.turn_id);
@@ -849,7 +1085,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
   const loadPersonDetail = async (id: string) => {
     setLoading(true);
     try {
-      const resp = await fetch(`${API_BASE}/people/${id}`);
+      const resp = await fetch(`${API_BASE}/people/${id}`, { credentials: "include" });
       const json = await resp.json() as ApiResponse<PersonDetail>;
       setPersonDetail(json.data);
     } catch (e) {
@@ -882,7 +1118,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
     if (!ok) return;
 
     try {
-      const resp = await fetch(`${API_BASE}/people/${person.id}`, { method: "DELETE" });
+      const resp = await fetch(`${API_BASE}/people/${person.id}`, { method: "DELETE", credentials: "include" });
       const json = await resp.json() as ApiResponse<{ ok: boolean }>;
       if (!resp.ok || json.code !== 0) {
         console.error("[people] delete error:", json.message);
@@ -907,6 +1143,7 @@ function PeopleView({ people, onRefresh }: { people: PersonSummary[]; onRefresh:
     try {
       const resp = await fetch(`${API_BASE}/suggest`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ person_id: selectedId, style: selectedStyle }),
       });

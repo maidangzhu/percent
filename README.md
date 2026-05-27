@@ -46,9 +46,10 @@
 │  GET  /people      — 联系人列表           │
 │  GET  /people/:id  — 联系人详情+聊天记录  │
 └──────────────┬──────────────────────────┘
-               │ PostgreSQL (Neon)
+               │
 ┌──────────────▼──────────────────────────┐
-│  数据库（见第三节）                       │
+│  本地 SQLite：People / Chat / Task / Logs │
+│  Neon PostgreSQL：Better Auth 用户与会话  │
 └─────────────────────────────────────────┘
 ```
 
@@ -186,5 +187,14 @@ npm run tauri:dev
 ```
 
 环境变量：
-- `apps/server/.env`：`DATABASE_URL`、`LLM_API_KEY`、`PORT`
+- `apps/server/.env`：`LLM_API_KEY`、`PORT`、`AUTH_DATABASE_URL`（或旧的 `DATABASE_URL` / `NEON_DATABASE_URL`）、`BETTER_AUTH_SECRET`、`BETTER_AUTH_URL`
 - `apps/client/.env`：`VITE_LLM_API_KEY`（临时，后续 AI 调用移到后端后删除）
+
+Auth 数据库：
+
+```bash
+cd apps/server
+pnpm run auth:db:push
+```
+
+`AUTH_DATABASE_URL` 指向 Neon。Better Auth 默认写入 Neon 的 `auth` schema，只保存用户、账号、会话和校验数据；聊天、People、Task、截图日志仍保存在 `~/.percent-tracker/percent.db`。
