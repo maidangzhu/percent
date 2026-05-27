@@ -225,8 +225,8 @@ analyzeRouter.post("/", async (c) => {
       orderBy: { capturedAt: "asc" },
       include: { messages: { orderBy: { seq: "asc" } } },
     });
-    const existingMessages = existingTurns.flatMap((existingTurn) =>
-      existingTurn.messages.map((message) => ({
+    const existingMessages = existingTurns.flatMap((existingTurn: { messages: { role: string; content: string }[] }) =>
+      existingTurn.messages.map((message: { role: string; content: string }) => ({
         role: message.role,
         content: message.content,
       }))
@@ -354,7 +354,7 @@ analyzeRouter.post("/", async (c) => {
         topic: turn.topic,
         captured_at: turn.capturedAt,
       },
-      messages: turn.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: turn.messages.map((m: { role: string; content: string }) => ({ role: m.role, content: m.content })),
       task_candidate: taskCandidate,
     },
   });

@@ -67,7 +67,7 @@ export async function detectTaskCandidate({
           should_create: {
             type: "boolean",
             description:
-              "当新增消息让待办、提醒、预约、上门服务、见面、跟进事项明确成立时为 true。例如对方提出时间并且我确认、对方确认明天/某时间会来、我需要等待对方上门或跟进、或我主动承诺要做某事。",
+              "当新增消息让待办、提醒、预约、上门服务、见面、跟进事项明确成立时为 true。例如对方提出时间并且我确认、对方确认明天/某时间会来、我需要等待对方上门或跟进、或我主动承诺要做某事。但需要把握好尺度，如果不是明确的事项，不应判断为 true",
           },
           title: { type: "string", description: "待办标题，20字以内" },
           description: { type: "string", description: "补充说明，可为空" },
