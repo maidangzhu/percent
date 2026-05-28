@@ -678,35 +678,22 @@ export default function Bubble() {
         content: message.content,
       }));
 
-      const resp = await fetch(`${API_BASE}/chat`, {
+      const resp = await fetch(`${API_BASE}/agent/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "kimi-k2.6",
           max_output_tokens: 600,
-          messages: [
-            {
-              role: "system",
-              content:
-                "你是一个运行在桌面气泡里的屏幕上下文 Agent。回答要简洁、直接、可执行。你会同时看到用户问题和当前屏幕截图；不要臆造截图里没有的信息。",
-            },
-            ...history.slice(0, -1),
-            {
-              role: "user",
-              content: [
-                { type: "image", image: agentScreenContext.imageBase64, mediaType: "image/png" },
-                {
-                  type: "text",
-                  text: `当前前台应用：${agentScreenContext.captured.app_name}\n时间：${agentScreenContext.captured.occurred_at}\n用户问题：${text}`,
-                },
-              ],
-            },
-          ],
+          messages: history,
+          screen_context: {
+            app_name: agentScreenContext.captured.app_name,
+            occurred_at: agentScreenContext.captured.occurred_at,
+            image_base64: agentScreenContext.imageBase64,
+          },
         }),
       });
 
       if (!resp.ok) {
-        console.error("[bubble] POST /chat agent failed:", resp.status, await resp.text());
+        console.error("[bubble] POST /agent/chat failed:", resp.status, await resp.text());
         setAgentMessages((messages) => [
           ...messages,
           {
