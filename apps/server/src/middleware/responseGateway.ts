@@ -23,6 +23,8 @@ export function responseGateway(): MiddlewareHandler {
   return async (c, next) => {
     await next();
 
+    if (c.req.path.startsWith("/api/")) return;
+
     const contentType = c.res.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) return;
 

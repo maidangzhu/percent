@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { MessageListInput } from "@mastra/core/agent/message-list";
 import { elapsedMs, logError, logInfo, logWarn } from "../lib/appLogger.js";
-import { screenAgent } from "../agents/screenAgent.js";
+import { percentAgent } from "../agents/percentAgent.js";
 
 export const agentRouter = new Hono();
 
@@ -20,6 +20,17 @@ type AgentChatRequestBody = {
   };
   max_output_tokens?: number;
 };
+
+type AgentToolCallView = {
+  id: string;
+  name: string;
+  input: unknown;
+};
+
+function getToolCallPayload(toolCall: unknown) {
+  const candidate = toolCall as { payload?: { toolCallId?: string; toolName?: string; args?: unknown } };
+  return candidate.payload;
+}
 
 agentRouter.post("/chat", async (c) => {
   const startedAt = Date.now();
@@ -79,7 +90,7 @@ agentRouter.post("/chat", async (c) => {
   });
 
   try {
-    const result = await screenAgent.generate(messages, {
+    const result = await percentAgent.generate(messages, {
       maxSteps: 5,
       modelSettings: {
         maxOutputTokens: body.max_output_tokens ?? 600,
@@ -94,17 +105,31 @@ agentRouter.post("/chat", async (c) => {
       duration_ms: elapsedMs(startedAt),
     });
 
+    const toolCalls: AgentToolCallView[] = result.toolCalls.map((toolCall, index) => {
+      const payload = getToolCallPayload(toolCall);
+      return {
+        id: payload?.toolCallId ?? `tool-${index}`,
+        name: payload?.toolName ?? "unknown_tool",
+        input: payload?.args ?? null,
+      };
+    });
+    const reasoningText = typeof result.reasoningText === "string" ? result.reasoningText : undefined;
+    const process = [
+      body.screen_context.app_name
+        ? `查看当前屏幕：${body.screen_context.app_name}`
+        : "查看当前屏幕",
+      ...toolCalls.map((toolCall) => `调用工具：${toolCall.name}`),
+    ];
+
     return c.json({
       data: {
         trace_id: traceId,
         text: result.text,
+        reasoning_text: reasoningText,
+        process,
         finish_reason: result.finishReason,
         usage: result.totalUsage,
-        tool_calls: result.toolCalls.map((toolCall) => ({
-          id: toolCall.payload.toolCallId,
-          name: toolCall.payload.toolName,
-          input: toolCall.payload.args,
-        })),
+        tool_calls: toolCalls,
         tool_results: result.toolResults,
       },
     });

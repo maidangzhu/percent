@@ -526,15 +526,21 @@ function SettingsView({
           credentials: "include",
         }),
       ]);
-      const logsJson = await logsResp.json() as ApiResponse<{ deleted: number }>;
+      const logsJson = await logsResp.json() as ApiResponse<{
+        deleted_logs?: number;
+        deleted_people?: number;
+        deleted_tasks?: number;
+      }>;
       if (!logsResp.ok || logsJson.code !== 0) {
-        throw new Error(logsJson.message || "清空 Logs 失败");
+        throw new Error(logsJson.message || "清空本地数据失败");
       }
-      const deletedLogs = logsJson.data?.deleted ?? 0;
+      const deletedLogs = logsJson.data?.deleted_logs ?? 0;
+      const deletedPeople = logsJson.data?.deleted_people ?? 0;
+      const deletedTasks = logsJson.data?.deleted_tasks ?? 0;
       setCacheMessage(
-        removed > 0 || deletedLogs > 0
-          ? `已清理 ${removed} 个本地缓存文件，清空 ${deletedLogs} 条 Logs 记录。`
-          : "没有可清理的本地缓存和 Logs 记录。"
+        removed > 0 || deletedLogs > 0 || deletedPeople > 0 || deletedTasks > 0
+          ? `已清理 ${removed} 个本地缓存文件，清空 ${deletedLogs} 条 Logs、${deletedPeople} 个 People、${deletedTasks} 条 Task。`
+          : "没有可清理的本地缓存、Logs、People 或 Task。"
       );
       onCacheCleared();
       setClearCacheOpen(false);
@@ -593,7 +599,7 @@ function SettingsView({
       <section className="settings-section">
         <div className="settings-section-main">
           <h2>清空缓存</h2>
-          <p>清理本机截图文件、本地 enter / AI 日志文件和 Logs 页面记录，不会删除 People、聊天记录或 Task。</p>
+          <p>清理本机截图文件、本地 enter / AI 日志文件，以及 Logs、People、聊天记录和 Task。</p>
         </div>
         <div className="settings-section-action">
           <AlertDialog.Root open={clearCacheOpen} onOpenChange={setClearCacheOpen}>
@@ -606,7 +612,7 @@ function SettingsView({
                 <div className="alert-dialog-header">
                   <AlertDialog.Title className="alert-dialog-title">确认清空缓存？</AlertDialog.Title>
                   <AlertDialog.Description className="alert-dialog-description">
-                    将清理本机截图缓存、本地 enter / AI 日志文件和 Logs 页面记录。People、聊天记录和 Task 不会被删除。
+                    将清理本机截图缓存、本地 enter / AI 日志文件，以及 Logs、People、聊天记录和 Task。
                   </AlertDialog.Description>
                 </div>
                 <div className="alert-dialog-actions">
@@ -840,7 +846,7 @@ function TasksView({ tasks, onRefresh }: { tasks: TaskRow[]; onRefresh: () => vo
         </div>
         <div className="header-actions">
           <label className="mock-switch-label" title="只用于预览右下角 AI 确认气泡，不会创建任务">
-            <span>Mock 测试 Task</span>
+            <span>预览任务确认</span>
             <button
               type="button"
               className={`mock-switch ${mockPreviewOn ? "on" : ""}`}

@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { MastraServer } from "@mastra/hono";
 
 import { logsRouter } from "./routes/logs.js";
 import { peopleRouter } from "./routes/people.js";
@@ -15,6 +16,7 @@ import { auth } from "./auth/index.js";
 import { logInfo } from "./lib/appLogger.js";
 import { gatewayErrorHandler, responseGateway } from "./middleware/responseGateway.js";
 import { initializeLocalDatabase } from "./db/init.js";
+import { mastra } from "./mastra.js";
 
 const app = new Hono();
 const allowedOrigins = new Set([
@@ -40,6 +42,14 @@ app.use(
   })
 );
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
+
+const mastraServer = new MastraServer({
+  app,
+  mastra,
+  prefix: "/api",
+});
+await mastraServer.init();
+
 app.use("*", responseGateway());
 app.onError(gatewayErrorHandler);
 

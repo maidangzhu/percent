@@ -58,6 +58,10 @@ Desktop.ini
 # Claude Code
 .claude
 
+# Agent local skills
+.agents
+skills-lock.json
+
 # TypeScript
 *.tsbuildinfo
 

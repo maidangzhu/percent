@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { MastraClient, createTool } from "@mastra/client-js";
+import { z } from "zod";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -33,10 +36,17 @@ interface BubbleNativeHoverPayload {
 
 type AgentRole = "user" | "assistant";
 
+type AgentMessageKind = "message" | "reasoning" | "tool_call" | "tool_result" | "error";
+
 interface AgentMessage {
   id: string;
   role: AgentRole;
+  kind: AgentMessageKind;
   content: string;
+  toolName?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
+  isError?: boolean;
 }
 
 interface AgentScreenContext {
@@ -47,6 +57,9 @@ interface AgentScreenContext {
 // ---- 配置 ----
 
 const API_BASE = "http://localhost:3000";
+const mastraClient = new MastraClient({
+  baseUrl: API_BASE,
+});
 
 interface ApiResponse<T> {
   code: number;
@@ -69,13 +82,13 @@ interface TaskCandidate {
 
 const MOCK_TASK_CANDIDATE: TaskCandidate = {
   person_id: null,
-  person_name: "Mock 测试",
+  person_name: "预览联系人",
   log_id: null,
   source_turn_id: null,
-  title: "Mock 测试 Task",
+  title: "预览任务",
   description: "预览右下角 AI 确认气泡。",
   due_at: null,
-  evidence: "Mock：是否将识别到的任务填充到 Task？",
+  evidence: "预览：是否将识别到的任务填充到 Task？",
   fingerprint: "mock-task-preview",
   raw_ai_response: { source: "task-page-preview" },
 };
@@ -111,6 +124,45 @@ interface SuggestionPanel {
 
 async function imagePathToBase64(path: string): Promise<string> {
   return await invoke<string>("read_file_base64", { path });
+}
+
+const readScreenTool = createTool({
+  id: "read_screen",
+  description: "Read the current foreground app and screenshot from the user's desktop.",
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    occurred_at: z.string(),
+    app_name: z.string(),
+    app_bundle_id: z.string(),
+    is_wechat: z.boolean(),
+    screenshot_image_base64: z.string(),
+    mime_type: z.literal("image/png"),
+  }),
+  execute: async () => {
+    const captured = await invoke<CaptureContext>("capture_current_context");
+    if (!captured.screenshot_path) {
+      throw new Error("missing screenshot");
+    }
+
+    return {
+      occurred_at: captured.occurred_at,
+      app_name: captured.app_name,
+      app_bundle_id: captured.app_bundle_id,
+      is_wechat: captured.is_wechat,
+      screenshot_image_base64: await imagePathToBase64(captured.screenshot_path),
+      mime_type: "image/png" as const,
+    };
+  },
+});
+
+function formatToolPayload(value: unknown) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 // ---- 核心流程 ----
@@ -280,10 +332,19 @@ export default function Bubble() {
   const [agentScreenContext, setAgentScreenContext] = useState<AgentScreenContext | null>(null);
   const [mockPreview, setMockPreview] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const timerRef = useRef<number | null>(null);
   const suggestionTimerRef = useRef<number | null>(null);
   const actionMenuCloseTimerRef = useRef<number | null>(null);
-  const dragRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    startedAt: number;
+  } | null>(null);
+  const draggingRef = useRef(false);
+  const suppressClickUntilRef = useRef(0);
   const agentComposingRef = useRef(false);
 
   const clearAutoCreateTimer = () => {
@@ -320,6 +381,7 @@ export default function Bubble() {
   };
 
   const openActionMenu = () => {
+    if (draggingRef.current) return;
     clearActionMenuCloseTimer();
     if (!suggestionLoading && !agentLoading) {
       setActionMenuOpen(true);
@@ -327,6 +389,11 @@ export default function Bubble() {
   };
 
   const scheduleCloseActionMenu = () => {
+    if (draggingRef.current) {
+      clearActionMenuCloseTimer();
+      setActionMenuOpen(false);
+      return;
+    }
     clearActionMenuCloseTimer();
     actionMenuCloseTimerRef.current = window.setTimeout(() => {
       setActionMenuOpen(false);
@@ -506,6 +573,7 @@ export default function Bubble() {
   }
 
   const handleClick = async () => {
+    if (Date.now() < suppressClickUntilRef.current) return;
     if (dragRef.current?.moved) return;
     if (agentOpen && agentInput.trim()) {
       await sendAgentMessage();
@@ -636,6 +704,7 @@ export default function Bubble() {
         {
           id: `${Date.now()}-assistant-error`,
           role: "assistant",
+          kind: "error",
           content: "没有拿到截图，请检查截图权限。",
         },
       ]);
@@ -646,6 +715,29 @@ export default function Bubble() {
     setAgentOpen(true);
   };
 
+  const appendAgentDelta = (kind: "message" | "reasoning", delta: string) => {
+    if (!delta) return;
+    setAgentMessages((messages) => {
+      const last = messages[messages.length - 1];
+      if (last?.role === "assistant" && last.kind === kind) {
+        return [
+          ...messages.slice(0, -1),
+          { ...last, content: last.content + delta },
+        ];
+      }
+
+      return [
+        ...messages,
+        {
+          id: `${Date.now()}-${kind}-${Math.random().toString(36).slice(2, 7)}`,
+          role: "assistant",
+          kind,
+          content: delta,
+        },
+      ];
+    });
+  };
+
   const sendAgentMessage = async () => {
     const text = agentInput.trim();
     if (!text || agentLoading) return;
@@ -653,6 +745,7 @@ export default function Bubble() {
     const userMessage: AgentMessage = {
       id: `${Date.now()}-user`,
       role: "user",
+      kind: "message",
       content: text,
     };
     const nextMessages = [...agentMessages, userMessage];
@@ -667,53 +760,114 @@ export default function Bubble() {
           {
             id: `${Date.now()}-assistant-error`,
             role: "assistant",
+            kind: "error",
             content: "没有可用的屏幕上下文，请点击 + 重新开始。",
           },
         ]);
         return;
       }
 
-      const history = nextMessages.slice(-8).map((message) => ({
-        role: message.role,
-        content: message.content,
-      }));
-
-      const resp = await fetch(`${API_BASE}/agent/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          max_output_tokens: 600,
-          messages: history,
-          screen_context: {
-            app_name: agentScreenContext.captured.app_name,
-            occurred_at: agentScreenContext.captured.occurred_at,
-            image_base64: agentScreenContext.imageBase64,
+      const history = nextMessages
+        .filter((message) => message.kind === "message" && message.content.trim())
+        .slice(-8)
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+      const latestUserIndex = history.map((message) => message.role).lastIndexOf("user");
+      const priorHistory = latestUserIndex > 0 ? history.slice(0, latestUserIndex) : [];
+      const agent = mastraClient.getAgent("percent-agent");
+      const streamMessages = [
+        ...priorHistory,
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              image: agentScreenContext.imageBase64,
+              mimeType: "image/png",
+            },
+            {
+              type: "text",
+              text: `当前前台应用：${agentScreenContext.captured.app_name}\n时间：${agentScreenContext.captured.occurred_at}\n用户问题：${text}`,
+            },
+          ],
+        },
+      ];
+      const response = await agent.stream(
+        streamMessages as Parameters<typeof agent.stream>[0],
+        {
+          maxSteps: 5,
+          modelSettings: {
+            maxOutputTokens: 600,
           },
-        }),
-      });
+          clientTools: {
+            read_screen: readScreenTool,
+          },
+        }
+      );
 
-      if (!resp.ok) {
-        console.error("[bubble] POST /agent/chat failed:", resp.status, await resp.text());
+      if (!response.ok) {
+        console.error("[bubble] Mastra agent stream failed:", response.status, await response.text());
         setAgentMessages((messages) => [
           ...messages,
           {
             id: `${Date.now()}-assistant-error`,
             role: "assistant",
+            kind: "error",
             content: "Agent 请求失败，请看控制台日志。",
           },
         ]);
         return;
       }
 
-      const data = await resp.json() as ApiResponse<{ text: string }>;
-      setAgentMessages((messages) => [
-        ...messages,
-        {
-          id: `${Date.now()}-assistant`,
-          role: "assistant",
-          content: data.data.text.trim() || "没有生成有效回复。",
+      await response.processDataStream({
+        onChunk: async (chunk) => {
+          if (chunk.type === "text-delta") {
+            appendAgentDelta("message", chunk.payload.text);
+          } else if (chunk.type === "reasoning-delta") {
+            appendAgentDelta("reasoning", chunk.payload.text);
+          } else if (chunk.type === "tool-call") {
+            setAgentMessages((messages) => [
+              ...messages,
+              {
+                id: `${chunk.payload.toolCallId}-call`,
+                role: "assistant",
+                kind: "tool_call",
+                content: `调用 ${chunk.payload.toolName}`,
+                toolName: chunk.payload.toolName,
+                toolInput: chunk.payload.args,
+              },
+            ]);
+          } else if (chunk.type === "tool-result") {
+            setAgentMessages((messages) => [
+              ...messages,
+              {
+                id: `${chunk.payload.toolCallId}-result`,
+                role: "assistant",
+                kind: "tool_result",
+                content: `${chunk.payload.toolName} 完成`,
+                toolName: chunk.payload.toolName,
+                toolResult: chunk.payload.result,
+                isError: chunk.payload.isError,
+              },
+            ]);
+          } else if (chunk.type === "tool-error") {
+            setAgentMessages((messages) => [
+              ...messages,
+              {
+                id: `${chunk.payload.toolCallId ?? Date.now()}-tool-error`,
+                role: "assistant",
+                kind: "tool_result",
+                content: `${chunk.payload.toolName ?? "tool"} 失败`,
+                toolName: chunk.payload.toolName,
+                toolResult: chunk.payload.error,
+                isError: true,
+              },
+            ]);
+          }
         },
-      ]);
+      });
     } catch (e) {
       console.error("[bubble] agent loop failed:", e);
       setAgentMessages((messages) => [
@@ -721,6 +875,7 @@ export default function Bubble() {
         {
           id: `${Date.now()}-assistant-error`,
           role: "assistant",
+          kind: "error",
           content: "Agent 处理失败，请看控制台日志。",
         },
       ]);
@@ -731,12 +886,20 @@ export default function Bubble() {
 
   const handleDragStart = (event: React.PointerEvent) => {
     if (event.button !== 0) return;
+    clearActionMenuCloseTimer();
+    setActionMenuOpen(false);
+    draggingRef.current = true;
+    setIsDragging(true);
     dragRef.current = {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
       moved: false,
+      startedAt: Date.now(),
     };
+    getCurrentWindow().startDragging().catch((e) =>
+      console.error("[bubble] native drag failed:", e)
+    );
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -746,28 +909,51 @@ export default function Bubble() {
 
     const deltaX = event.clientX - drag.x;
     const deltaY = event.clientY - drag.y;
-    if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+    if (Math.abs(deltaX) < 3 && Math.abs(deltaY) < 3) return;
 
     drag.x = event.clientX;
     drag.y = event.clientY;
     drag.moved = true;
-
-    invoke("move_bubble_by_drag", { deltaX, deltaY }).catch((e) =>
-      console.error("[bubble] move by drag failed:", e)
-    );
   };
 
   const handleDragEnd = (event: React.PointerEvent) => {
-    if (dragRef.current?.pointerId === event.pointerId) {
+    const drag = dragRef.current;
+    if (drag?.pointerId === event.pointerId) {
+      const shouldSuppressClick = drag.moved || Date.now() - drag.startedAt > 180;
+      if (shouldSuppressClick) {
+        suppressClickUntilRef.current = Date.now() + 350;
+      }
+      draggingRef.current = false;
+      setIsDragging(false);
       window.setTimeout(() => {
         dragRef.current = null;
       }, 0);
     }
   };
 
+  useEffect(() => {
+    const clearDragState = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      suppressClickUntilRef.current = Date.now() + 350;
+      setIsDragging(false);
+      dragRef.current = null;
+    };
+
+    window.addEventListener("blur", clearDragState);
+    window.addEventListener("pointerup", clearDragState);
+    window.addEventListener("pointercancel", clearDragState);
+
+    return () => {
+      window.removeEventListener("blur", clearDragState);
+      window.removeEventListener("pointerup", clearDragState);
+      window.removeEventListener("pointercancel", clearDragState);
+    };
+  }, []);
+
   return (
-    <div className="bubble-container" ref={containerRef}>
-      {actionMenuOpen && !suggestionLoading && (
+    <div className={`bubble-container ${isDragging ? "dragging" : ""}`} ref={containerRef}>
+      {actionMenuOpen && !suggestionLoading && !isDragging && (
         <>
           <div
             className="bubble-chat-option"
@@ -822,6 +1008,7 @@ export default function Bubble() {
                       {
                         id: `${Date.now()}-assistant-error`,
                         role: "assistant",
+                        kind: "error",
                         content: "没有拿到截图，请检查截图权限。",
                       },
                     ]);
@@ -846,8 +1033,36 @@ export default function Bubble() {
               <div className="agent-empty">问我当前屏幕里的任何问题</div>
             ) : (
               agentMessages.map((message) => (
-                <div key={message.id} className={`agent-message ${message.role}`}>
-                  {message.role === "assistant" ? (
+                <div
+                  key={message.id}
+                  className={`agent-message ${message.role} ${message.kind} ${message.isError ? "error" : ""}`}
+                  title={
+                    message.kind === "tool_call"
+                      ? formatToolPayload(message.toolInput)
+                      : message.kind === "tool_result"
+                        ? formatToolPayload(message.toolResult)
+                        : undefined
+                  }
+                >
+                  {message.kind === "reasoning" ? (
+                    <em>{message.content}</em>
+                  ) : message.kind === "tool_call" ? (
+                    <>
+                      <span className="agent-tool-name">{message.toolName ?? "tool"}</span>
+                      {message.toolInput == null ? null : (
+                        <code>{formatToolPayload(message.toolInput)}</code>
+                      )}
+                    </>
+                  ) : message.kind === "tool_result" ? (
+                    <>
+                      <span className="agent-tool-name">
+                        {message.isError ? "失败" : "完成"} {message.toolName ?? "tool"}
+                      </span>
+                      {message.toolResult == null ? null : (
+                        <code>{formatToolPayload(message.toolResult)}</code>
+                      )}
+                    </>
+                  ) : message.role === "assistant" ? (
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {message.content}
                     </ReactMarkdown>
@@ -857,7 +1072,7 @@ export default function Bubble() {
                 </div>
               ))
             )}
-            {agentLoading && <div className="agent-message assistant pending">Thinking...</div>}
+            {agentLoading && <div className="agent-message assistant pending"><em>查看当前屏幕</em></div>}
           </div>
           <div className="agent-input-row">
             <input

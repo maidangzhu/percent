@@ -16,7 +16,7 @@ use keyboard::{start_keyboard_listener, ShortcutConfig};
 use logger::LogStore;
 use permissions::{get_required_permissions, open_permission_settings, request_permission};
 use screenshotter::capture_screen_without_bubble;
-use window::{move_bubble_by_drag, set_bubble_hit_regions, setup_windows, BubbleHitRegions};
+use window::{set_bubble_hit_regions, setup_windows, BubbleHitRegions};
 
 pub struct AppState {
     pub log_store: Mutex<LogStore>,
@@ -297,7 +297,6 @@ pub fn run() {
             report_ai_result,
             emit_tasks_updated,
             set_mock_task_preview,
-            move_bubble_by_drag,
             set_bubble_hit_regions,
             get_required_permissions,
             open_permission_settings,

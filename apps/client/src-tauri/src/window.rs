@@ -5,9 +5,6 @@ use tauri::{App, AppHandle, Emitter, LogicalPosition, Manager, Position, Webview
 const BUBBLE_WIDTH: i32 = 760;
 const BUBBLE_HEIGHT: i32 = 760;
 const MARGIN: f64 = 28.0;
-const BUBBLE_DIAMETER: f64 = 64.0;
-const BUBBLE_RIGHT_OFFSET: f64 = 24.0;
-const BUBBLE_BOTTOM_OFFSET: f64 = 24.0;
 const HIT_TEST_INTERVAL_MS: u64 = 50;
 const INITIAL_HIT_TEST_GRACE_TICKS: u32 = 40;
 
@@ -37,28 +34,6 @@ pub fn set_bubble_hit_regions(
     if let Ok(mut current) = state.0.write() {
         *current = regions;
     }
-}
-
-#[tauri::command]
-pub fn move_bubble_by_drag(delta_x: f64, delta_y: f64, app: AppHandle) {
-    let Some(bubble) = app.get_webview_window("bubble") else {
-        return;
-    };
-    let Ok(position) = bubble.outer_position() else {
-        return;
-    };
-    let Ok(scale_factor) = bubble.scale_factor() else {
-        return;
-    };
-
-    let current_x = position.x as f64 / scale_factor;
-    let current_y = position.y as f64 / scale_factor;
-    let target_x = current_x + delta_x;
-    let target_y = current_y + delta_y;
-    let (x, y) = clamp_bubble_window_position(&bubble, target_x, target_y)
-        .unwrap_or((target_x, target_y));
-
-    let _ = bubble.set_position(Position::Logical(LogicalPosition::new(x, y)));
 }
 
 pub fn setup_windows(app: &App) {
@@ -122,11 +97,7 @@ fn start_bubble_hit_test_listener(app_handle: AppHandle) {
                 empty_region_ticks > INITIAL_HIT_TEST_GRACE_TICKS
             } else {
                 empty_region_ticks = 0;
-                let (Ok(window_position), Ok(cursor_position), Ok(scale_factor)) = (
-                    bubble.outer_position(),
-                    bubble.cursor_position(),
-                    bubble.scale_factor(),
-                ) else {
+                let Some(cursor_position) = bubble_window_cursor_position(&bubble) else {
                     if !last_ignore {
                         let _ = bubble.set_ignore_cursor_events(true);
                         last_ignore = true;
@@ -135,10 +106,10 @@ fn start_bubble_hit_test_listener(app_handle: AppHandle) {
                 };
 
                 !regions.iter().any(|region| {
-                    let x_min = window_position.x as f64 + region.x * scale_factor;
-                    let x_max = window_position.x as f64 + (region.x + region.width) * scale_factor;
-                    let y_min = window_position.y as f64 + region.y * scale_factor;
-                    let y_max = window_position.y as f64 + (region.y + region.height) * scale_factor;
+                    let x_min = region.x;
+                    let x_max = region.x + region.width;
+                    let y_min = region.y;
+                    let y_max = region.y + region.height;
 
                     let contains = cursor_position.x >= x_min
                         && cursor_position.x <= x_max
@@ -183,6 +154,41 @@ fn start_bubble_hit_test_listener(app_handle: AppHandle) {
     });
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WindowCursorPosition {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+fn bubble_window_cursor_position(window: &WebviewWindow<Wry>) -> Option<WindowCursorPosition> {
+    use objc2::runtime::AnyObject;
+    use objc2::msg_send;
+    use objc2_foundation::{NSPoint, NSRect};
+
+    let ns_window = window.ns_window().ok()? as *mut AnyObject;
+    unsafe {
+        let frame: NSRect = msg_send![ns_window, frame];
+        let point: NSPoint = msg_send![ns_window, mouseLocationOutsideOfEventStream];
+        Some(WindowCursorPosition {
+            x: point.x,
+            y: frame.size.height - point.y,
+        })
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bubble_window_cursor_position(window: &WebviewWindow<Wry>) -> Option<WindowCursorPosition> {
+    let position = window.outer_position().ok()?;
+    let cursor = window.cursor_position().ok()?;
+    let scale_factor = window.scale_factor().ok()?;
+
+    Some(WindowCursorPosition {
+        x: (cursor.x - position.x as f64) / scale_factor,
+        y: (cursor.y - position.y as f64) / scale_factor,
+    })
+}
+
 fn get_monitor_for_window(app_handle: &AppHandle, label: &str) -> Option<tauri::Monitor> {
     let window = app_handle.get_webview_window(label)?;
     let monitor = window.primary_monitor().ok().flatten()
@@ -222,28 +228,6 @@ fn position_bubble_window_with_size(app_handle: &AppHandle, width: i32, height: 
             let _ = bubble.set_focus();
         }
     }
-}
-
-fn clamp_bubble_window_position(window: &WebviewWindow<Wry>, x: f64, y: f64) -> Option<(f64, f64)> {
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| window.primary_monitor().ok().flatten())?;
-    let scale_factor = monitor.scale_factor();
-    let work_area = monitor.work_area();
-    let work_area_size = work_area.size.to_logical::<f64>(scale_factor);
-    let work_area_position = work_area.position.to_logical::<f64>(scale_factor);
-
-    let bubble_left_in_window = f64::from(BUBBLE_WIDTH) - BUBBLE_RIGHT_OFFSET - BUBBLE_DIAMETER;
-    let bubble_top_in_window = f64::from(BUBBLE_HEIGHT) - BUBBLE_BOTTOM_OFFSET - BUBBLE_DIAMETER;
-
-    let min_x = work_area_position.x + MARGIN - bubble_left_in_window;
-    let max_x = work_area_position.x + work_area_size.width - MARGIN - bubble_left_in_window - BUBBLE_DIAMETER;
-    let min_y = work_area_position.y + MARGIN - bubble_top_in_window;
-    let max_y = work_area_position.y + work_area_size.height - MARGIN - bubble_top_in_window - BUBBLE_DIAMETER;
-
-    Some((x.clamp(min_x, max_x), y.clamp(min_y, max_y)))
 }
 
 #[cfg(target_os = "macos")]

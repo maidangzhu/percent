@@ -175,11 +175,11 @@ const createTaskTool = createTool({
   },
 });
 
-export const screenAgent = new Agent({
-  id: "screen-agent",
-  name: "Percent Screen Agent",
+export const percentAgent = new Agent({
+  id: "percent-agent",
+  name: "Percent Agent",
   instructions:
-    "你是 Percent 桌面气泡里的屏幕上下文 Agent。回答要简洁、直接、可执行。你会看到当前屏幕截图、前台应用和用户问题；不要臆造截图里没有的信息。需要历史上下文时，可以用工具查询本地联系人、聊天记录和任务。只有当用户明确要求记录/新增待办时，才调用 create_task。回复使用用户提问的语言。",
+    "你是 Percent 桌面气泡里的个人助理 Agent。回答要简洁、直接、可执行。需要当前屏幕时调用 read_screen 客户端工具；不要臆造工具结果里没有的信息。需要历史上下文时，可以用工具查询本地联系人、聊天记录和任务。只有当用户明确要求记录/新增待办时，才调用 create_task。回复使用用户提问的语言。",
   model: createMoonshotModel(),
   tools: {
     find_people: findPeopleTool,

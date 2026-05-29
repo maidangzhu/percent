@@ -4,7 +4,6 @@ import { elapsedMs, logError, logInfo } from "../lib/appLogger.js";
 import { newSnowflakeId } from "../lib/snowflake.js";
 
 export const logsRouter = new Hono();
-const CACHE_CLEAR_PLACEHOLDER_LOG_ID = "system-cache-clear-placeholder";
 const CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID = "percent.internal.cache";
 
 // GET /logs — 分页获取日志列表
@@ -55,7 +54,7 @@ logsRouter.get("/", async (c) => {
   return c.json({ data, total, limit, offset });
 });
 
-// DELETE /logs — 清空本地 raw logs，同时保留 People / Chat / Task 数据
+// DELETE /logs — 清空本地缓存数据
 logsRouter.delete("/", async (c) => {
   const startedAt = Date.now();
 
@@ -63,54 +62,40 @@ logsRouter.delete("/", async (c) => {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const [logCount, linkedTurnCount] = await Promise.all([
+      const [logCount, personCount, turnCount, messageCount, taskCount] = await Promise.all([
         tx.log.count({
           where: {
             appBundleId: { not: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID },
           },
         }),
-        tx.chatTurn.count({
-          where: {
-            logId: { not: CACHE_CLEAR_PLACEHOLDER_LOG_ID },
-          },
-        }),
+        tx.person.count(),
+        tx.chatTurn.count(),
+        tx.chatMessage.count(),
+        tx.task.count(),
       ]);
 
-      if (linkedTurnCount > 0) {
-        await tx.log.upsert({
-          where: { id: CACHE_CLEAR_PLACEHOLDER_LOG_ID },
-          create: {
-            id: CACHE_CLEAR_PLACEHOLDER_LOG_ID,
-            occurredAt: new Date(0),
-            appName: "Percent",
-            appBundleId: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID,
-            isSend: false,
-            isWechat: false,
-            screenshotPath: null,
-          },
-          update: {},
-        });
-
-        await tx.chatTurn.updateMany({
-          where: {
-            logId: { not: CACHE_CLEAR_PLACEHOLDER_LOG_ID },
-          },
-          data: {
-            logId: CACHE_CLEAR_PLACEHOLDER_LOG_ID,
-          },
-        });
-      }
-
-      const deleted = await tx.log.deleteMany({
+      const deletedTasks = await tx.task.deleteMany();
+      const deletedMessages = await tx.chatMessage.deleteMany();
+      const deletedTurns = await tx.chatTurn.deleteMany();
+      const deletedPeople = await tx.person.deleteMany();
+      const deletedLogs = await tx.log.deleteMany({
         where: {
           appBundleId: { not: CACHE_CLEAR_PLACEHOLDER_BUNDLE_ID },
         },
       });
 
       return {
-        requested: logCount,
-        deleted: deleted.count,
-        preserved_chat_turns: linkedTurnCount,
+        requested_logs: logCount,
+        deleted: deletedLogs.count,
+        deleted_logs: deletedLogs.count,
+        deleted_people: deletedPeople.count,
+        deleted_chat_turns: deletedTurns.count,
+        deleted_chat_messages: deletedMessages.count,
+        deleted_tasks: deletedTasks.count,
+        requested_people: personCount,
+        requested_chat_turns: turnCount,
+        requested_chat_messages: messageCount,
+        requested_tasks: taskCount,
       };
     });
 
